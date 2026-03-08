@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>LiveKit Local Test</title>
+    <style>
+      body { font-family: -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif; margin: 24px; }
+      input, button { font-size: 14px; padding: 8px; margin: 4px 0; width: 100%; }
+      .row { max-width: 640px; }
+      #log { white-space: pre-wrap; background: #f5f5f5; padding: 12px; border-radius: 8px; }
+    </style>
+  </head>
+  <body>
+    <div class="row">
+      <h2>LiveKit Local Voice Test</h2>
+      <label>Server URL</label>
+      <input id="url" value="ws://localhost:7880" />
+      <label>Token</label>
+      <input id="token" placeholder="Paste JWT" />
+      <button id="join">Join Room</button>
+      <button id="leave">Leave Room</button>
+      <h3>Logs</h3>
+      <div id="log"></div>
+    </div>
+
+    <script type="module">
+      import { Room, RoomEvent } from 'https://cdn.jsdelivr.net/npm/livekit-client@2.15.9/+esm';
+
+      const logEl = document.getElementById('log');
+      const joinBtn = document.getElementById('join');
+      const leaveBtn = document.getElementById('leave');
+      const log = (msg) => {
+        const t = new Date().toLocaleTimeString();
+        logEl.textContent = `[${t}] ${msg}\n` + logEl.textContent;
+      };
+
+      let room = null;
+      const audioEls = new Set();
+
+      const cleanupAudio = () => {
+        for (const el of audioEls) {
+          try {
+            el.pause();
+            el.srcObject = null;
+            el.remove();
+          } catch (_) {}
+        }
+        audioEls.clear();
+      };
+
+      const bindRoomEvents = (r) => {
+        r.on(RoomEvent.Connected, () => log('connected'));
+        r.on(RoomEvent.Disconnected, () => {
+          log('disconnected');
+          cleanupAudio();
+        });
+        r.on(RoomEvent.ParticipantConnected, (p) => log(`participant joined: ${p.identity}`));
+        r.on(RoomEvent.ParticipantDisconnected, (p) => log(`participant left: ${p.identity}`));
+        r.on(RoomEvent.TrackSubscribed, async (track, pub, participant) => {
+          log(`subscribed: ${participant.identity} (${track.kind})`);
+          if (track.kind !== 'audio') return;
+
+          const el = track.attach();
+          el.autoplay = true;
+          el.controls = true;
+          el.style.display = 'none';
+          document.body.appendChild(el);
+          audioEls.add(el);
+          try {
+            await el.play();
+            log(`audio playing: ${participant.identity}`);
+          } catch (e) {
+            log(`audio play blocked/error: ${e?.message || e}`);
+          }
+        });
+        r.on(RoomEvent.TrackUnsubscribed, (track, pub, participant) => {
+          log(`unsubscribed: ${participant.identity} (${track.kind})`);
+          if (track.kind !== 'audio') return;
+          const detached = track.detach();
+          detached.forEach((el) => {
+            audioEls.delete(el);
+            try {
+              el.pause();
+              el.srcObject = null;
+              el.remove();
+            } catch (_) {}
+          });
+        });
+      };
+
+      joinBtn.onclick = async () => {
+        joinBtn.disabled = true;
+        try {
+          const url = document.getElementById('url').value.trim();
+          const token = document.getElementById('token').value.trim();
+          if (!url || !token) {
+            log('join error: url/token required');
+            return;
+          }
+          if (room) {
+            try {
+              await room.disconnect();
+            } catch (_) {}
+            room = null;
+          }
+          cleanupAudio();
+
+          room = new Room();
+          bindRoomEvents(room);
+          await room.connect(url, token);
+          await room.localParticipant.setMicrophoneEnabled(true);
+          log('microphone enabled');
+        } catch (e) {
+          log('join error: ' + (e?.message || e));
+        } finally {
+          joinBtn.disabled = false;
+        }
+      };
+
+      leaveBtn.onclick = async () => {
+        if (!room) return;
+        try {
+          await room.disconnect();
+        } catch (e) {
+          log('leave error: ' + (e?.message || e));
+        } finally {
+          room = null;
+          cleanupAudio();
+        }
+      };
+    </script>
+  </body>
+</html>

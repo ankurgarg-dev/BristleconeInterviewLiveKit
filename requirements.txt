@@ -1,0 +1,7 @@
+livekit-agents[deepgram,openai,silero]>=1.2.8
+livekit-api>=1.0.2
+python-dotenv>=1.0.1
+fastapi>=0.115.0
+uvicorn>=0.30.0
+itsdangerous>=2.2.0
+pytest>=8.3.0

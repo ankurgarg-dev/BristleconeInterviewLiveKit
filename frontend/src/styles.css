@@ -1,0 +1,169 @@
+:root {
+  font-family: 'IBM Plex Sans', ui-sans-serif, system-ui, -apple-system;
+  color: #102027;
+  background: radial-gradient(circle at top left, #d9f4ff, #f6fbff 45%, #eef6ef);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+}
+
+h1,
+h3 {
+  margin: 0;
+}
+
+input,
+button,
+textarea,
+select {
+  width: 100%;
+  padding: 0.7rem;
+  border-radius: 0.5rem;
+  border: 1px solid #9db6be;
+  font: inherit;
+}
+
+button {
+  background: #005f7a;
+  color: #fff;
+  border: none;
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.error {
+  color: #b00020;
+}
+
+.auth-card,
+.join-page {
+  max-width: 1100px;
+  margin: 2rem auto;
+  padding: 1rem;
+}
+
+.auth-card {
+  max-width: 420px;
+  background: #fff;
+  border-radius: 1rem;
+  box-shadow: 0 12px 30px rgba(16, 32, 39, 0.08);
+}
+
+.join-page header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1rem;
+}
+
+.user-actions {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.join-grid {
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  gap: 1rem;
+}
+
+.join-config,
+.join-preview {
+  background: #fff;
+  border-radius: 1rem;
+  padding: 1rem;
+  box-shadow: 0 10px 24px rgba(16, 32, 39, 0.08);
+}
+
+.toggle-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  margin: 0.6rem 0;
+}
+
+.toggle-row input {
+  width: auto;
+}
+
+.meeting-layout {
+  height: 100vh;
+}
+
+.meeting-shell {
+  display: grid;
+  grid-template-columns: 1fr 260px;
+  height: 100vh;
+}
+
+.meeting-main {
+  min-height: 0;
+}
+
+.sidebar {
+  background: #ffffffde;
+  border-left: 1px solid #d0dde1;
+  padding: 1rem;
+  overflow-y: auto;
+}
+
+.sidebar ul {
+  list-style: none;
+  padding: 0;
+  margin: 1rem 0 0;
+}
+
+.sidebar li {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  margin-bottom: 0.4rem;
+}
+
+.ai-pill {
+  background: #daefff;
+  color: #00506a;
+  border-radius: 999px;
+  padding: 0.1rem 0.4rem;
+}
+
+.banner {
+  margin: 0.5rem;
+  padding: 0.5rem 0.7rem;
+  border-radius: 0.5rem;
+  background: #fff0f0;
+}
+
+.centered {
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+}
+
+@media (max-width: 900px) {
+  .join-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .meeting-shell {
+    grid-template-columns: 1fr;
+    grid-template-rows: 1fr auto;
+  }
+
+  .sidebar {
+    border-left: none;
+    border-top: 1px solid #d0dde1;
+    max-height: 180px;
+  }
+}
