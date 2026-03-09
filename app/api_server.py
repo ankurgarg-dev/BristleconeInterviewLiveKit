@@ -15,7 +15,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, HTTPException, Request, Response
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -30,6 +30,14 @@ if __package__ in (None, ""):
 load_dotenv()
 
 from shared.agent_dispatch import ensure_agent_for_room, prepare_observer_room
+from app.positions_service import (
+    create_position,
+    extract_position_details,
+    extract_text_from_file,
+    get_position,
+    load_positions,
+    update_position,
+)
 from shared.config import settings
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -125,6 +133,32 @@ class TranscriptStatusResponse(BaseModel):
     room: str
     exists: bool
     line_count: int
+
+
+class PositionUpsertRequest(BaseModel):
+    role_title: str = ""
+    jd_text: str = ""
+    level: str = ""
+    must_haves: list[str] = Field(default_factory=list)
+    nice_to_haves: list[str] = Field(default_factory=list)
+    tech_stack: list[str] = Field(default_factory=list)
+    focus_areas: list[str] = Field(default_factory=list)
+    evaluation_policy: str = ""
+    extraction_confidence: dict[str, float] = Field(default_factory=dict)
+    missing_fields: list[str] = Field(default_factory=list)
+
+
+class PositionRecord(PositionUpsertRequest):
+    position_id: str
+    created_by: str
+    created_at: str
+    updated_at: str
+    version: int
+
+
+class PositionExtractResponse(PositionUpsertRequest):
+    used_llm: bool
+    warnings: list[str] = Field(default_factory=list)
 
 
 def create_app() -> FastAPI:
@@ -443,6 +477,75 @@ def create_app() -> FastAPI:
             media_type="text/plain; charset=utf-8",
             headers={"Content-Disposition": f'attachment; filename="{safe_name}-transcript.txt"'},
         )
+
+    @app.get("/api/positions", response_model=list[PositionRecord])
+    async def list_positions(username: str = Depends(require_session_user)) -> list[PositionRecord]:
+        _ = username
+        return [PositionRecord(**row) for row in load_positions()]
+
+    @app.get("/api/positions/{position_id}", response_model=PositionRecord)
+    async def get_position_by_id(
+        position_id: str,
+        username: str = Depends(require_session_user),
+    ) -> PositionRecord:
+        _ = username
+        row = get_position(position_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="position not found")
+        return PositionRecord(**row)
+
+    @app.post("/api/positions", response_model=PositionRecord)
+    async def create_new_position(
+        payload: PositionUpsertRequest,
+        username: str = Depends(require_session_user),
+    ) -> PositionRecord:
+        created = create_position(payload.model_dump(), created_by=username)
+        return PositionRecord(**created)
+
+    @app.put("/api/positions/{position_id}", response_model=PositionRecord)
+    async def update_existing_position(
+        position_id: str,
+        payload: PositionUpsertRequest,
+        username: str = Depends(require_session_user),
+    ) -> PositionRecord:
+        _ = username
+        updated = update_position(position_id, payload.model_dump())
+        if updated is None:
+            raise HTTPException(status_code=404, detail="position not found")
+        return PositionRecord(**updated)
+
+    @app.post("/api/positions/extract", response_model=PositionExtractResponse)
+    async def extract_position_payload(
+        jd_text: str | None = Form(default=None),
+        file: UploadFile | None = File(default=None),
+        username: str = Depends(require_session_user),
+    ) -> PositionExtractResponse:
+        _ = username
+        jd_parts: list[str] = []
+
+        if file is not None:
+            raw = await file.read()
+            if not raw:
+                raise HTTPException(status_code=400, detail="uploaded file is empty")
+            try:
+                extracted_text = extract_text_from_file(file.filename or "upload.txt", raw)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            except Exception as exc:  # noqa: BLE001
+                raise HTTPException(status_code=400, detail=f"unable to parse uploaded file: {exc}") from exc
+
+            if extracted_text.strip():
+                jd_parts.append(extracted_text.strip())
+
+        if jd_text and jd_text.strip():
+            jd_parts.append(jd_text.strip())
+
+        if not jd_parts:
+            raise HTTPException(status_code=400, detail="provide jd_text or a valid file")
+
+        merged_jd_text = "\n\n".join(jd_parts).strip()
+        extracted, used_llm, warnings = extract_position_details(merged_jd_text)
+        return PositionExtractResponse(**extracted, used_llm=used_llm, warnings=warnings)
 
     @app.get("/api/metrics")
     async def get_metrics(

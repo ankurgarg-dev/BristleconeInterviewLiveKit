@@ -1,14 +1,22 @@
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080';
 
 async function api(path, options = {}) {
-  const response = await fetch(`${API_BASE_URL}${path}`, {
-    credentials: 'include',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(options.headers || {}),
-    },
-    ...options,
-  });
+  let response;
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, {
+      credentials: 'include',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(options.headers || {}),
+      },
+      ...options,
+    });
+  } catch (err) {
+    if (err instanceof TypeError) {
+      throw new Error(`Network error calling ${API_BASE_URL}${path}. Verify backend API is running on ${API_BASE_URL}.`);
+    }
+    throw err;
+  }
 
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
@@ -63,5 +71,35 @@ export const apiClient = {
       blob,
       filename: match?.[1] || `${room}-transcript.txt`,
     };
+  },
+  listPositions: () => api('/api/positions', { method: 'GET' }),
+  getPosition: (positionId) => api(`/api/positions/${encodeURIComponent(positionId)}`, { method: 'GET' }),
+  createPosition: (payload) =>
+    api('/api/positions', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  updatePosition: (positionId, payload) =>
+    api(`/api/positions/${encodeURIComponent(positionId)}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    }),
+  extractPosition: async ({ jdText, file }) => {
+    const formData = new FormData();
+    if (jdText?.trim()) formData.append('jd_text', jdText.trim());
+    if (file) formData.append('file', file);
+    const response = await fetch(`${API_BASE_URL}/api/positions/extract`, {
+      method: 'POST',
+      credentials: 'include',
+      body: formData,
+    });
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      if (response.status === 404) {
+        throw new Error('positions extract API not found. Restart backend API server and try again.');
+      }
+      throw new Error(body.detail || `request failed: ${response.status}`);
+    }
+    return response.json();
   },
 };

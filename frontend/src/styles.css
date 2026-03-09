@@ -503,6 +503,92 @@ button:disabled {
   color: #4e6973;
 }
 
+.positions-page {
+  display: grid;
+  gap: 1rem;
+}
+
+.positions-hero {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+}
+
+.positions-actions {
+  display: flex;
+  gap: 0.6rem;
+}
+
+.positions-actions button {
+  width: auto;
+  min-width: 140px;
+}
+
+.positions-grid {
+  display: grid;
+  grid-template-columns: 1.1fr 1fr;
+  gap: 1rem;
+}
+
+.positions-list-card,
+.positions-form-card {
+  display: grid;
+  gap: 0.75rem;
+  align-content: start;
+}
+
+.positions-list-card h3,
+.positions-form-card h3 {
+  margin: 0;
+}
+
+.positions-table-wrap {
+  overflow: auto;
+}
+
+.positions-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.92rem;
+}
+
+.positions-table th,
+.positions-table td {
+  border-bottom: 1px solid #e0ebef;
+  padding: 0.55rem 0.35rem;
+  text-align: left;
+  vertical-align: top;
+}
+
+.positions-table tbody tr {
+  cursor: pointer;
+}
+
+.positions-table tbody tr.selected {
+  background: #dff2f8;
+  box-shadow: inset 4px 0 0 #178aa5;
+}
+
+.positions-table tbody tr:hover {
+  background: #f6fbfd;
+}
+
+.positions-table tbody tr.selected td {
+  font-weight: 600;
+}
+
+.positions-form {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.positions-meta {
+  margin: 0;
+  color: #3d5d68;
+  font-size: 0.86rem;
+}
+
 @media (max-width: 900px) {
   .auth-page {
     padding-bottom: 5rem;
@@ -553,6 +639,22 @@ button:disabled {
   }
 
   .portal-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .positions-hero {
+    flex-direction: column;
+  }
+
+  .positions-actions {
+    width: 100%;
+  }
+
+  .positions-actions button {
+    flex: 1;
+  }
+
+  .positions-grid {
     grid-template-columns: 1fr;
   }
 

@@ -23,6 +23,7 @@ import { apiClient } from './api';
 import { AgentAudioVisualizerAura } from './components/agents-ui/agent-audio-visualizer-aura';
 import { AgentAudioVisualizerRadial } from './components/agents-ui/agent-audio-visualizer-radial';
 import { AgentAudioVisualizerWave } from './components/agents-ui/agent-audio-visualizer-wave';
+import { PositionsPage } from './components/PositionsPage';
 import authBackground from './assets/Background.png';
 import authCam from './assets/Cam.png';
 import authLogo from './assets/logo.png';
@@ -1203,10 +1204,7 @@ function HomePage({ user, tokenInfo, defaultRoom, onJoin, onLeaveMeeting, onLogo
               <JoinCard user={user} onJoin={onJoin} defaultRoom={defaultRoom} />
             ))}
           {activeMenu === 'positions' && (
-            <PlaceholderPage
-              title="Positions"
-              description="Manage open roles, hiring pipeline stages, and ownership."
-            />
+            <PositionsPage />
           )}
           {activeMenu === 'candidates' && (
             <PlaceholderPage
