@@ -20,6 +20,15 @@ class EnsureAgentResult:
     created_dispatch: bool
 
 
+@dataclass(frozen=True)
+class PrepareObserverRoomResult:
+    room_exists: bool
+    blocked_by_humans: bool
+    removed_dispatches: int
+    removed_agents: int
+    human_identities: tuple[str, ...]
+
+
 def is_agent_participant(participant: Any) -> bool:
     identity = getattr(participant, "identity", "") or ""
     if identity.startswith("agent-"):
@@ -103,4 +112,59 @@ async def ensure_agent_for_room(
             has_agent=bool(agent_participants),
             had_valid_dispatch=bool(valid_dispatches),
             created_dispatch=should_create_dispatch,
+        )
+
+
+async def prepare_observer_room(room: str) -> PrepareObserverRoomResult:
+    async with api.LiveKitAPI(
+        url=settings.livekit_url,
+        api_key=settings.livekit_api_key,
+        api_secret=settings.livekit_api_secret,
+    ) as lk:
+        rooms = await lk.room.list_rooms(ListRoomsRequest(names=[room]))
+        if not rooms.rooms:
+            return PrepareObserverRoomResult(
+                room_exists=False,
+                blocked_by_humans=False,
+                removed_dispatches=0,
+                removed_agents=0,
+                human_identities=(),
+            )
+
+        participants = await lk.room.list_participants(ListParticipantsRequest(room=room))
+        agent_participants = [p for p in participants.participants if is_agent_participant(p)]
+        human_participants = [p for p in participants.participants if not is_agent_participant(p)]
+        human_identities = tuple((getattr(p, "identity", "") or "").strip() for p in human_participants)
+        if human_participants:
+            return PrepareObserverRoomResult(
+                room_exists=True,
+                blocked_by_humans=True,
+                removed_dispatches=0,
+                removed_agents=0,
+                human_identities=tuple(identity for identity in human_identities if identity),
+            )
+
+        dispatches = await lk.agent_dispatch.list_dispatch(room)
+        removed_dispatches = 0
+        for dispatch in dispatches:
+            dispatch_id = getattr(dispatch, "id", "") or ""
+            if not dispatch_id:
+                continue
+            await lk.agent_dispatch.delete_dispatch(dispatch_id=dispatch_id, room_name=room)
+            removed_dispatches += 1
+
+        removed_agents = 0
+        for participant in agent_participants:
+            identity = getattr(participant, "identity", "") or ""
+            if not identity:
+                continue
+            await lk.room.remove_participant(api.RoomParticipantIdentity(room=room, identity=identity))
+            removed_agents += 1
+
+        return PrepareObserverRoomResult(
+            room_exists=True,
+            blocked_by_humans=False,
+            removed_dispatches=removed_dispatches,
+            removed_agents=removed_agents,
+            human_identities=(),
         )

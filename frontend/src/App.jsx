@@ -18,11 +18,14 @@ import {
   useVoiceAssistant,
 } from '@livekit/components-react';
 import { RoomEvent, Track } from 'livekit-client';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { apiClient } from './api';
 import { AgentAudioVisualizerAura } from './components/agents-ui/agent-audio-visualizer-aura';
 import { AgentAudioVisualizerRadial } from './components/agents-ui/agent-audio-visualizer-radial';
 import { AgentAudioVisualizerWave } from './components/agents-ui/agent-audio-visualizer-wave';
+import authBackground from './assets/Background.png';
+import authCam from './assets/Cam.png';
+import authLogo from './assets/logo.png';
 import './styles.css';
 
 let globalDirectPc = null;
@@ -67,21 +70,30 @@ function LoginCard({ onLoggedIn }) {
   }
 
   return (
-    <div className="auth-card">
-      <h1>Sign in to meeting app</h1>
-      <form onSubmit={submit}>
-        <label htmlFor="username">Username</label>
-        <input id="username" value={username} onChange={(e) => setUsername(e.target.value)} />
-        <label htmlFor="password">Password</label>
-        <input
-          id="password"
-          type="password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-        />
-        <button disabled={loading}>{loading ? 'Signing in...' : 'Sign in'}</button>
-      </form>
-      {error && <p className="error">{error}</p>}
+    <div className="auth-page" style={{ backgroundImage: `url(${authBackground})` }}>
+      <header className="auth-brand">
+        <img src={authLogo} alt="Bristlecone" />
+      </header>
+      <div className="auth-hero-circle" aria-hidden="true">
+        <img src={authCam} alt="" />
+      </div>
+      <section className="auth-form-shell">
+        <div className="auth-card">
+          <form onSubmit={submit}>
+            <label htmlFor="username">Username</label>
+            <input id="username" value={username} onChange={(e) => setUsername(e.target.value)} />
+            <label htmlFor="password">Password</label>
+            <input
+              id="password"
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+            />
+            <button disabled={loading}>{loading ? 'Signing in...' : 'Sign in'}</button>
+          </form>
+          {error && <p className="error">{error}</p>}
+        </div>
+      </section>
     </div>
   );
 }
@@ -430,6 +442,7 @@ function AgentWaveConference({
   micEnabled,
   assistantSpeaking,
 }) {
+  const participants = useParticipants();
   const tracks = useTracks(
     [
       { source: Track.Source.Camera, withPlaceholder: true },
@@ -437,24 +450,61 @@ function AgentWaveConference({
     ],
     { updateOnlyOn: [RoomEvent.ActiveSpeakersChanged], onlySubscribed: false },
   );
+  const hasObserverAgentTile = participants.some((p) => {
+    if (p.isLocal) return false;
+    const id = (p.identity || '').toLowerCase();
+    return id.startsWith('agent-') || id.includes('observer');
+  });
+  const showObserverFallbackTile = targetAgent === 'observer' && !hasObserverAgentTile;
+  const observerFallbackState = (() => {
+    const mapped = mapObserverStatusToAuraState(status);
+    if (mapped === 'connecting' || mapped === 'disconnected') return mapped;
+    if (assistantSpeaking) return 'speaking';
+    return 'listening';
+  })();
+  const localTrackRef = tracks.find((t) => isTrackReference(t) && t.participant?.isLocal) || null;
+  const localParticipant = participants.find((p) => p.isLocal) || null;
 
   return (
     <div className="lk-video-conference">
       <div className="lk-video-conference-inner">
-        <div className="lk-grid-layout-wrapper">
-          <GridLayout tracks={tracks}>
-            <ParticipantTile>
-              <AgentWaveTileContent
-                targetAgent={targetAgent}
-                status={status}
-                audioElement={audioElement}
-                micStream={micStream}
-                micEnabled={micEnabled}
-                assistantSpeaking={assistantSpeaking}
-              />
-            </ParticipantTile>
-          </GridLayout>
-        </div>
+        {showObserverFallbackTile ? (
+          <div className="observer-dual-layout">
+            <div className="standard-participant-tile">
+              {localTrackRef ? <VideoTrack trackRef={localTrackRef} /> : <div className="tile-fallback" />}
+              <div className="standard-participant-meta">
+                {localParticipant?.name || localParticipant?.identity || 'You'}
+              </div>
+            </div>
+            <div className="observer-orb-tile">
+              <div className="observer-aura-shell">
+                <AgentAudioVisualizerAura
+                  state={observerFallbackState}
+                  color="#21A6BD"
+                  colorShift={2}
+                  themeMode="dark"
+                  className="observer-aura"
+                />
+              </div>
+              <div className="standard-participant-meta">Observer</div>
+            </div>
+          </div>
+        ) : (
+          <div className="lk-grid-layout-wrapper">
+            <GridLayout tracks={tracks}>
+              <ParticipantTile>
+                <AgentWaveTileContent
+                  targetAgent={targetAgent}
+                  status={status}
+                  audioElement={audioElement}
+                  micStream={micStream}
+                  micEnabled={micEnabled}
+                  assistantSpeaking={assistantSpeaking}
+                />
+              </ParticipantTile>
+            </GridLayout>
+          </div>
+        )}
         <ControlBar controls={{ chat: false, settings: false }} />
       </div>
       <RoomAudioRenderer />
@@ -547,7 +597,7 @@ function ObserverMicRelayGate({ enabled, directMicRef, onMicEnabledChange }) {
   return null;
 }
 
-function MeetingView({ tokenInfo, onLeave }) {
+function MeetingView({ tokenInfo, onLeave, userName }) {
   const [error, setError] = useState('');
   const [directStatus, setDirectStatus] = useState('');
   const [directError, setDirectError] = useState('');
@@ -561,6 +611,10 @@ function MeetingView({ tokenInfo, onLeave }) {
   const directConnectInFlightRef = useRef(false);
   const directConnectionKeyRef = useRef('');
   const directStartTimerRef = useRef(null);
+  const transcriptSeenRef = useRef(new Set());
+  const observerAssistantBuffersRef = useRef(new Map());
+  const observerSeenUserItemsRef = useRef(new Set());
+  const observerSeenAssistantItemsRef = useRef(new Set());
   const useWaveAgentUi =
     tokenInfo.selectedAgent === 'observer' ||
     tokenInfo.selectedAgent === 'realtime' ||
@@ -568,6 +622,23 @@ function MeetingView({ tokenInfo, onLeave }) {
     tokenInfo.selectedAgent === 'interviewer';
   const useDirectObserver = tokenInfo.selectedAgent === 'observer' && tokenInfo.aiEnabled;
   const livekitAudioEnabled = tokenInfo.audioEnabled;
+
+  const appendTranscriptLine = useCallback(async ({ room, speaker, text, source, uniqueKey }) => {
+    const trimmed = (text || '').trim();
+    if (!trimmed || !room) return;
+    const key = uniqueKey || `${source || 'livekit'}:${speaker || 'Unknown'}:${trimmed}`;
+    if (transcriptSeenRef.current.has(key)) return;
+    transcriptSeenRef.current.add(key);
+    try {
+      await apiClient.appendTranscript({
+        room,
+        speaker: speaker || 'Unknown',
+        text: trimmed,
+        source: source || 'livekit',
+        unique_key: key,
+      });
+    } catch (_) {}
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -629,6 +700,49 @@ function MeetingView({ tokenInfo, onLeave }) {
               eventType === 'output_audio_buffer.stopped'
             ) {
               setDirectStatus('Assistant listening');
+            }
+
+            const itemKey =
+              payload?.item_id || payload?.output_item_id || payload?.response_id || payload?.id || '';
+            if (
+              eventType === 'response.audio_transcript.delta' ||
+              eventType === 'response.output_audio_transcript.delta'
+            ) {
+              const next = `${observerAssistantBuffersRef.current.get(itemKey) || ''}${payload?.delta || ''}`;
+              observerAssistantBuffersRef.current.set(itemKey, next);
+            }
+            if (eventType === 'response.output_audio_transcript.done') {
+              if (itemKey && observerSeenAssistantItemsRef.current.has(itemKey)) {
+                return;
+              }
+              const finalText = (payload?.transcript || observerAssistantBuffersRef.current.get(itemKey) || '').trim();
+              if (finalText) {
+                if (itemKey) observerSeenAssistantItemsRef.current.add(itemKey);
+                appendTranscriptLine({
+                  room: tokenInfo.room,
+                  speaker: 'AI Assistant',
+                  text: finalText,
+                  source: 'observer-assistant',
+                  uniqueKey: `observer:assistant:${itemKey || finalText}`,
+                });
+              }
+              observerAssistantBuffersRef.current.delete(itemKey);
+            }
+            if (eventType === 'conversation.item.input_audio_transcription.completed') {
+              if (itemKey && observerSeenUserItemsRef.current.has(itemKey)) {
+                return;
+              }
+              const userText = (payload?.transcript || '').trim();
+              if (userText) {
+                if (itemKey) observerSeenUserItemsRef.current.add(itemKey);
+                appendTranscriptLine({
+                  room: tokenInfo.room,
+                  speaker: userName || 'User',
+                  text: userText,
+                  source: 'observer-user',
+                  uniqueKey: `observer:user:${itemKey || userText}`,
+                });
+              }
             }
           } catch (_) {}
         };
@@ -708,8 +822,11 @@ function MeetingView({ tokenInfo, onLeave }) {
       directConnectionKeyRef.current = '';
       setDirectStatus('');
       setDirectError('');
+      observerAssistantBuffersRef.current.clear();
+      observerSeenUserItemsRef.current.clear();
+      observerSeenAssistantItemsRef.current.clear();
     };
-  }, [tokenInfo.instructions, tokenInfo.realtimeModel, useDirectObserver]);
+  }, [appendTranscriptLine, tokenInfo.instructions, tokenInfo.realtimeModel, tokenInfo.room, useDirectObserver, userName]);
 
   useEffect(() => {
     if (!useDirectObserver || !directAudioElement) {
@@ -832,21 +949,68 @@ function MeetingView({ tokenInfo, onLeave }) {
   );
 }
 
-function JoinCard({ user, onJoin, onLogout }) {
-  const [room, setRoom] = useState('demo-room');
+function JoinCard({ user, onJoin, defaultRoom = 'demo-room' }) {
+  const [room, setRoom] = useState(defaultRoom || 'demo-room');
   const [aiEnabled, setAiEnabled] = useState(true);
   const [agent, setAgent] = useState('assistant');
   const [instructions, setInstructions] = useState('');
   const [pendingChoices, setPendingChoices] = useState(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [transcriptAvailable, setTranscriptAvailable] = useState(false);
+  const [downloadLoading, setDownloadLoading] = useState(false);
+  const fallbackChoices = useMemo(() => ({ audioEnabled: true, videoEnabled: true }), []);
+  const observerSuffix = '-observer';
+
+  const effectiveRoom = useMemo(() => {
+    const base = room.trim();
+    if (!base) return '';
+    if (agent !== 'observer') return base;
+    return base.endsWith(observerSuffix) ? base : `${base}${observerSuffix}`;
+  }, [agent, room]);
+
+  useEffect(() => {
+    setRoom(defaultRoom || 'demo-room');
+  }, [defaultRoom]);
+
+  useEffect(() => {
+    const roomName = effectiveRoom;
+    if (!roomName) {
+      setTranscriptAvailable(false);
+      return undefined;
+    }
+
+    let cancelled = false;
+    const refreshStatus = async () => {
+      try {
+        const status = await apiClient.transcriptStatus(roomName);
+        if (!cancelled) {
+          setTranscriptAvailable(Boolean(status?.exists));
+        }
+      } catch (_) {
+        if (!cancelled) {
+          setTranscriptAvailable(false);
+        }
+      }
+    };
+
+    const timer = window.setTimeout(refreshStatus, 250);
+    const poll = window.setInterval(refreshStatus, 3000);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+      window.clearInterval(poll);
+    };
+  }, [effectiveRoom]);
 
   async function startMeeting(choices) {
+    const resolvedChoices = choices || pendingChoices || fallbackChoices;
     setLoading(true);
     setError('');
     try {
       const tokenInfo = await apiClient.issueToken({
-        room,
+        room: effectiveRoom,
         display_name: user,
         ai_enabled: aiEnabled,
         agent,
@@ -864,8 +1028,8 @@ function JoinCard({ user, onJoin, onLogout }) {
         aiEnabled,
         instructions: instructions || '',
         realtimeModel: 'gpt-realtime-mini',
-        audioEnabled: choices.audioEnabled,
-        videoEnabled: choices.videoEnabled,
+        audioEnabled: resolvedChoices.audioEnabled,
+        videoEnabled: resolvedChoices.videoEnabled,
       });
     } catch (err) {
       setError(err.message);
@@ -874,20 +1038,37 @@ function JoinCard({ user, onJoin, onLogout }) {
     }
   }
 
+  async function downloadTranscript() {
+    const roomName = effectiveRoom;
+    if (!roomName) return;
+    setDownloadLoading(true);
+    setError('');
+    try {
+      const { blob, filename } = await apiClient.downloadTranscript(roomName);
+      const url = window.URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = filename || `${roomName}-transcript.txt`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setDownloadLoading(false);
+    }
+  }
+
   return (
     <div className="join-page">
-      <header>
-        <h1>LiveKit Meeting</h1>
-        <div className="user-actions">
-          <span>{user}</span>
-          <button onClick={onLogout}>Logout</button>
-        </div>
-      </header>
-
       <div className="join-grid">
         <section className="join-config">
           <label htmlFor="room">Room</label>
           <input id="room" value={room} onChange={(e) => setRoom(e.target.value)} />
+          {agent === 'observer' && effectiveRoom && (
+            <p className="helper-note">Observer room: {effectiveRoom}</p>
+          )}
 
           <label htmlFor="agent">AI agent</label>
           <select id="agent" value={agent} onChange={(e) => setAgent(e.target.value)}>
@@ -918,10 +1099,17 @@ function JoinCard({ user, onJoin, onLogout }) {
           />
 
           <button
-            disabled={!pendingChoices || loading}
-            onClick={() => pendingChoices && startMeeting(pendingChoices)}
+            disabled={loading}
+            onClick={() => startMeeting(pendingChoices || fallbackChoices)}
           >
             {loading ? 'Joining...' : 'Join meeting'}
+          </button>
+          <button
+            type="button"
+            disabled={!transcriptAvailable || downloadLoading}
+            onClick={downloadTranscript}
+          >
+            {downloadLoading ? 'Downloading...' : 'Download transcript'}
           </button>
           {error && <p className="error">{error}</p>}
         </section>
@@ -933,7 +1121,10 @@ function JoinCard({ user, onJoin, onLogout }) {
               audioEnabled: true,
               videoEnabled: true,
             }}
-            onSubmit={(choices) => setPendingChoices(choices)}
+            onSubmit={(choices) => {
+              setPendingChoices(choices);
+              startMeeting(choices);
+            }}
             onError={(err) => setError(err.message)}
             persistUserChoices={true}
           />
@@ -943,10 +1134,118 @@ function JoinCard({ user, onJoin, onLogout }) {
   );
 }
 
+function PlaceholderPage({ title, description }) {
+  return (
+    <section className="portal-page">
+      <div className="portal-hero">
+        <h1>{title}</h1>
+        <p>{description}</p>
+      </div>
+      <div className="portal-grid">
+        <article className="portal-card">
+          <h3>Overview</h3>
+          <p>Dashboard widgets and lists for this section can be added here.</p>
+        </article>
+        <article className="portal-card">
+          <h3>Recent activity</h3>
+          <p>Recent updates, ownership, and status indicators can be shown in this panel.</p>
+        </article>
+      </div>
+    </section>
+  );
+}
+
+function HomePage({ user, tokenInfo, defaultRoom, onJoin, onLeaveMeeting, onLogout }) {
+  const [activeMenu, setActiveMenu] = useState('meeting');
+  const menuItems = [
+    { key: 'meeting', label: 'Meeting Demo' },
+    { key: 'positions', label: 'Positions' },
+    { key: 'candidates', label: 'Candidates' },
+    { key: 'interviews', label: 'Interviews' },
+    { key: 'settings', label: 'Settings' },
+  ];
+  const userInitials = user
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0].toUpperCase())
+    .join('');
+
+  return (
+    <div className="portal-shell">
+      <header className="portal-topbar">
+        <img src={authLogo} alt="Bristlecone" className="portal-logo" />
+        <div className="portal-user">
+          <span className="portal-avatar">{userInitials || 'U'}</span>
+          <span>{user}</span>
+        </div>
+      </header>
+
+      <div className="portal-body">
+        <aside className="portal-nav">
+          {menuItems.map((item) => (
+            <button
+              key={item.key}
+              type="button"
+              className={`portal-nav-item ${activeMenu === item.key ? 'active' : ''}`}
+              onClick={() => setActiveMenu(item.key)}
+            >
+              {item.label}
+            </button>
+          ))}
+        </aside>
+
+        <main className="portal-content">
+          {activeMenu === 'meeting' &&
+            (tokenInfo ? (
+              <MeetingView tokenInfo={tokenInfo} onLeave={onLeaveMeeting} userName={user} />
+            ) : (
+              <JoinCard user={user} onJoin={onJoin} defaultRoom={defaultRoom} />
+            ))}
+          {activeMenu === 'positions' && (
+            <PlaceholderPage
+              title="Positions"
+              description="Manage open roles, hiring pipeline stages, and ownership."
+            />
+          )}
+          {activeMenu === 'candidates' && (
+            <PlaceholderPage
+              title="Candidates"
+              description="Track candidate profiles, status, and recruiter notes."
+            />
+          )}
+          {activeMenu === 'interviews' && (
+            <PlaceholderPage
+              title="Interviews"
+              description="Review upcoming interview loops, schedules, and outcomes."
+            />
+          )}
+          {activeMenu === 'settings' && (
+            <section className="portal-page">
+              <div className="portal-hero">
+                <h1>Settings</h1>
+                <p>Manage account preferences and workspace defaults.</p>
+              </div>
+              <div className="portal-grid">
+                <article className="portal-card">
+                  <h3>Session</h3>
+                  <p>Sign out of the current session when you are done.</p>
+                  <button onClick={onLogout}>Logout</button>
+                </article>
+              </div>
+            </section>
+          )}
+        </main>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const [user, setUser] = useState('');
   const [loading, setLoading] = useState(true);
   const [tokenInfo, setTokenInfo] = useState(null);
+  const [lastRoom, setLastRoom] = useState('demo-room');
 
   useEffect(() => {
     let mounted = true;
@@ -972,11 +1271,22 @@ export default function App() {
     await apiClient.logout().catch(() => {});
     setTokenInfo(null);
     setUser('');
+    setLastRoom('demo-room');
   }
 
   if (loading) return <main className="centered">Loading...</main>;
   if (!user) return <LoginCard onLoggedIn={setUser} />;
-  if (!tokenInfo) return <JoinCard user={user} onJoin={setTokenInfo} onLogout={logout} />;
-
-  return <MeetingView tokenInfo={tokenInfo} onLeave={() => setTokenInfo(null)} />;
+  return (
+    <HomePage
+      user={user}
+      tokenInfo={tokenInfo}
+      defaultRoom={lastRoom}
+      onJoin={(nextTokenInfo) => {
+        setTokenInfo(nextTokenInfo);
+        if (nextTokenInfo?.room) setLastRoom(nextTokenInfo.room);
+      }}
+      onLeaveMeeting={() => setTokenInfo(null)}
+      onLogout={logout}
+    />
+  );
 }

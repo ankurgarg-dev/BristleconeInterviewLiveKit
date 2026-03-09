@@ -2,9 +2,13 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import logging
 import os
+import re
 import sys
+import threading
+from datetime import UTC, datetime
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -15,6 +19,8 @@ if __package__ in (None, ""):
 
 load_dotenv()
 logger = logging.getLogger("app.main")
+worker_transcript_lock = threading.Lock()
+worker_transcript_seen: dict[str, set[str]] = {}
 
 from agents.assistant.agent import AssistantAgentFactory
 from agents.base.registry import AgentRegistry
@@ -24,6 +30,38 @@ from agents.realtime.agent import RealtimeAgentFactory
 from agents.support.agent import SupportAgentFactory
 from shared.config import settings
 from shared.utils import build_realtime_session, build_voice_session, parse_metadata, select_agent_name
+
+
+def _safe_filename_component(value: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", value.strip())
+    return cleaned[:128] or "room"
+
+
+def _worker_transcript_path(room: str) -> Path:
+    safe_room = _safe_filename_component(room)
+    return Path(__file__).resolve().parents[1] / "data" / "transcripts" / f"{safe_room}.jsonl"
+
+
+def _append_worker_transcript(*, room: str, speaker: str, text: str, source: str, unique_key: str) -> None:
+    line = {
+        "timestamp": datetime.now(UTC).isoformat(),
+        "room": room,
+        "speaker": speaker,
+        "source": source,
+        "text": text,
+        "username": "agent-worker",
+    }
+
+    with worker_transcript_lock:
+        seen = worker_transcript_seen.setdefault(room, set())
+        if unique_key in seen:
+            return
+        seen.add(unique_key)
+
+        path = _worker_transcript_path(room)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as fp:
+            fp.write(json.dumps(line, ensure_ascii=False) + "\n")
 
 
 def parse_args() -> tuple[str, list[str]]:
@@ -65,6 +103,7 @@ async def rtc_entrypoint(ctx: JobContext) -> None:
         return
 
     registry = create_registry()
+    room_name = (getattr(ctx.room, "name", "") or "").strip()
 
     default_agent = os.getenv("ACTIVE_AGENT", settings.default_agent)
     agent_name = select_agent_name(
@@ -72,6 +111,17 @@ async def rtc_entrypoint(ctx: JobContext) -> None:
         dispatch_metadata=dispatch_metadata,
         room_metadata=room_metadata,
     )
+
+    # Hard isolation: observer-designated rooms must never run worker voice agents.
+    if room_name.endswith("-observer") and agent_name != "observer":
+        logger.warning(
+            "rejecting non-observer agent in observer room room=%s selected_agent=%s metadata=%s",
+            room_name,
+            agent_name,
+            dispatch_metadata,
+        )
+        ctx.shutdown("Observer room accepts only observer agent")
+        return
 
     selected_agent = registry.create(agent_name, metadata=dispatch_metadata)
     if agent_name == "observer":
@@ -85,6 +135,28 @@ async def rtc_entrypoint(ctx: JobContext) -> None:
         return
 
     session = build_realtime_session() if agent_name == "realtime" else build_voice_session()
+
+    @session.on("conversation_item_added")
+    def _on_conversation_item_added(event) -> None:
+        item = getattr(event, "item", None)
+        if item is None:
+            return
+        role = getattr(item, "role", "")
+        text = (getattr(item, "text_content", None) or "").strip()
+        if role not in ("user", "assistant") or not text:
+            return
+
+        room_name = getattr(ctx.room, "name", "") or "room"
+        speaker = "User" if role == "user" else f"{agent_name.title()} Agent"
+        unique_key = f"worker:{role}:{getattr(item, 'id', '') or text}"
+        _append_worker_transcript(
+            room=room_name,
+            speaker=speaker,
+            text=text,
+            source=f"agent-{agent_name}",
+            unique_key=unique_key,
+        )
+
     await session.start(
         agent=selected_agent,
         room=ctx.room,

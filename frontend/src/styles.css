@@ -2,6 +2,8 @@
   font-family: 'IBM Plex Sans', ui-sans-serif, system-ui, -apple-system;
   color: #102027;
   background: radial-gradient(circle at top left, #d9f4ff, #f6fbff 45%, #eef6ef);
+  --brand-primary: #21a6bd;
+  --brand-alt: #4bc984;
   --aura-main-1: #21a6bd;
   --aura-main-2: #4bc984;
   --aura-secondary-1: #e05e00;
@@ -36,7 +38,7 @@ select {
 }
 
 button {
-  background: #005f7a;
+  background: var(--brand-primary);
   color: #fff;
   border: none;
   cursor: pointer;
@@ -63,6 +65,80 @@ button:disabled {
   background: #fff;
   border-radius: 1rem;
   box-shadow: 0 12px 30px rgba(16, 32, 39, 0.08);
+}
+
+.auth-page {
+  position: relative;
+  min-height: 100vh;
+  overflow: hidden;
+  background-color: #ebebeb;
+  background-repeat: no-repeat;
+  background-position: center center;
+  background-size: cover;
+  padding: clamp(1.4rem, 3.5vw, 3.6rem) clamp(1.2rem, 4.2vw, 4rem);
+}
+
+.auth-brand {
+  position: absolute;
+  left: clamp(1.2rem, 4.2vw, 4rem);
+  top: clamp(1.1rem, 3.8vw, 2.8rem);
+  z-index: 3;
+}
+
+.auth-brand img {
+  width: clamp(180px, 20vw, 306px);
+  height: auto;
+  display: block;
+  margin: 0;
+}
+
+.auth-form-shell {
+  position: absolute;
+  left: clamp(1.2rem, 4.2vw, 4rem);
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 3;
+}
+
+.auth-form-shell .auth-card {
+  margin: 0;
+  width: min(520px, 44vw);
+  max-width: none;
+  padding: 1.3rem 1.3rem 1.2rem;
+  border-radius: 0.9rem;
+  border: 1px solid #d7e2e9;
+  box-shadow: 0 18px 36px rgba(16, 32, 39, 0.12);
+}
+
+.auth-form-shell form {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.auth-form-shell label {
+  margin-top: 0.15rem;
+  font-size: 0.92rem;
+  color: #2a434e;
+}
+
+.auth-hero-circle {
+  position: absolute;
+  right: clamp(1.8rem, 4.2vw, 4.4rem);
+  top: 50%;
+  transform: translateY(-50%);
+  width: min(42vw, 500px);
+  aspect-ratio: 1;
+  border-radius: 50%;
+  overflow: hidden;
+  z-index: 2;
+}
+
+.auth-hero-circle img {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  display: block;
+  object-fit: cover;
 }
 
 .join-page header {
@@ -101,6 +177,12 @@ button:disabled {
 
 .toggle-row input {
   width: auto;
+}
+
+.helper-note {
+  margin: 0.35rem 0 0.8rem;
+  color: #3d5d68;
+  font-size: 0.82rem;
 }
 
 .meeting-layout {
@@ -193,6 +275,15 @@ button:disabled {
     linear-gradient(165deg, #061018 0%, #0a1a24 58%, #06141a 100%);
 }
 
+.observer-dual-layout {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.8rem;
+  width: 100%;
+  min-height: min(58vh, 460px);
+  padding: 0.2rem 0.2rem 0.8rem;
+}
+
 .observer-wave {
   width: 100%;
   height: 100%;
@@ -280,8 +371,188 @@ button:disabled {
   min-height: 100vh;
 }
 
+.portal-shell {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: #f4f8fa;
+}
+
+.portal-topbar {
+  height: 72px;
+  border-bottom: 1px solid #d4e2e9;
+  background: #fff;
+  padding: 0 1.25rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.portal-logo {
+  width: 210px;
+  height: auto;
+}
+
+.portal-user {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  color: #16333d;
+  font-weight: 600;
+}
+
+.portal-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  color: #fff;
+  background: linear-gradient(135deg, var(--brand-primary), var(--brand-alt));
+  font-size: 0.86rem;
+}
+
+.portal-body {
+  min-height: 0;
+  flex: 1;
+  display: grid;
+  grid-template-columns: 240px 1fr;
+}
+
+.portal-nav {
+  border-right: 1px solid #d4e2e9;
+  background: #f9fcfd;
+  padding: 1rem 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.portal-nav-item {
+  width: 100%;
+  text-align: left;
+  border-radius: 0.6rem;
+  border: 1px solid transparent;
+  background: transparent;
+  color: #21424d;
+  font-weight: 600;
+}
+
+.portal-nav-item.active {
+  background: #e8f7fa;
+  color: #0e6074;
+  border-color: #b7e2ea;
+}
+
+.portal-content {
+  min-height: 0;
+  overflow: auto;
+}
+
+.portal-content .join-page {
+  max-width: none;
+  margin: 0;
+  padding: 1.25rem;
+}
+
+.portal-content .meeting-layout,
+.portal-content .meeting-shell {
+  height: 100%;
+}
+
+.portal-page {
+  padding: 1.25rem;
+}
+
+.portal-hero {
+  margin-bottom: 1rem;
+}
+
+.portal-hero h1 {
+  margin: 0;
+  font-size: 1.5rem;
+  color: #13303a;
+}
+
+.portal-hero p {
+  margin: 0.35rem 0 0;
+  color: #4a6772;
+}
+
+.portal-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(260px, 1fr));
+  gap: 1rem;
+}
+
+.portal-card {
+  background: #fff;
+  border: 1px solid #d8e6ec;
+  border-radius: 0.9rem;
+  box-shadow: 0 10px 20px rgba(16, 32, 39, 0.06);
+  padding: 1rem;
+}
+
+.portal-card h3 {
+  margin: 0 0 0.4rem;
+  color: #12313a;
+}
+
+.portal-card p {
+  margin: 0;
+  color: #4e6973;
+}
+
 @media (max-width: 900px) {
+  .auth-page {
+    padding-bottom: 5rem;
+    background-position: 60% center;
+  }
+
+  .auth-brand {
+    left: 1.1rem;
+    top: 1.1rem;
+  }
+
+  .auth-form-shell {
+    top: auto;
+    bottom: 1rem;
+    left: 1rem;
+    right: 1rem;
+    transform: none;
+  }
+
+  .auth-form-shell .auth-card {
+    max-width: none;
+  }
+
+  .auth-hero-circle {
+    width: min(50vw, 320px);
+    right: 0.5rem;
+    top: 30%;
+  }
+
   .join-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .portal-body {
+    grid-template-columns: 1fr;
+  }
+
+  .portal-nav {
+    border-right: none;
+    border-bottom: 1px solid #d4e2e9;
+    overflow-x: auto;
+    flex-direction: row;
+    padding: 0.75rem;
+  }
+
+  .portal-nav-item {
+    min-width: 150px;
+  }
+
+  .portal-grid {
     grid-template-columns: 1fr;
   }
 

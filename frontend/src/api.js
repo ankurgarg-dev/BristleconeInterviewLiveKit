@@ -41,4 +41,27 @@ export const apiClient = {
       method: 'POST',
       body: JSON.stringify({ event, detail }),
     }),
+  appendTranscript: (payload) =>
+    api('/api/transcripts/append', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  transcriptStatus: (room) => api(`/api/transcripts/${encodeURIComponent(room)}/status`, { method: 'GET' }),
+  downloadTranscript: async (room) => {
+    const response = await fetch(`${API_BASE_URL}/api/transcripts/${encodeURIComponent(room)}/download`, {
+      method: 'GET',
+      credentials: 'include',
+    });
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      throw new Error(body.detail || `request failed: ${response.status}`);
+    }
+    const blob = await response.blob();
+    const disposition = response.headers.get('content-disposition') || '';
+    const match = disposition.match(/filename=\"?([^\";]+)\"?/i);
+    return {
+      blob,
+      filename: match?.[1] || `${room}-transcript.txt`,
+    };
+  },
 };
