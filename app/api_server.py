@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import logging
+import json
 import secrets
+import ssl
 import sys
 import time
+import urllib.error
+import urllib.request
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -16,14 +20,16 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from livekit.api import AccessToken, VideoGrants
 from pydantic import BaseModel, Field
+import certifi
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+load_dotenv()
+
 from shared.agent_dispatch import ensure_agent_for_room
 from shared.config import settings
 
-load_dotenv()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
 
@@ -83,6 +89,18 @@ class TokenResponse(BaseModel):
 class ClientEventRequest(BaseModel):
     event: str
     detail: str | None = None
+
+
+class OpenAIRealtimeTokenRequest(BaseModel):
+    model: str | None = None
+    voice: str | None = None
+    instructions: str | None = Field(default=None, max_length=2000)
+
+
+class OpenAIRealtimeTokenResponse(BaseModel):
+    client_secret: str
+    model: str
+    voice: str
 
 
 def create_app() -> FastAPI:
@@ -153,7 +171,8 @@ def create_app() -> FastAPI:
                 )
             ).to_jwt()
 
-            if payload.ai_enabled:
+            should_dispatch_agent = payload.ai_enabled and payload.agent.lower() != "observer"
+            if should_dispatch_agent:
                 metrics.dispatch_requests += 1
                 result = await ensure_agent_for_room(
                     room=payload.room,
@@ -164,11 +183,13 @@ def create_app() -> FastAPI:
                     metrics.dispatch_created += 1
 
             logging.info(
-                "issued token user=%s identity=%s room=%s ai_enabled=%s",
+                "issued token user=%s identity=%s room=%s ai_enabled=%s dispatch_enabled=%s agent=%s",
                 username,
                 identity,
                 payload.room,
                 payload.ai_enabled,
+                should_dispatch_agent,
+                payload.agent,
             )
 
             return TokenResponse(
@@ -200,6 +221,70 @@ def create_app() -> FastAPI:
             payload.detail,
         )
         return {"ok": True}
+
+    @app.post("/api/openai/realtime/token", response_model=OpenAIRealtimeTokenResponse)
+    async def create_openai_realtime_token(
+        payload: OpenAIRealtimeTokenRequest,
+        username: str = Depends(require_session_user),
+    ) -> OpenAIRealtimeTokenResponse:
+        if not settings.openai_api_key:
+            raise HTTPException(status_code=500, detail="OPENAI_API_KEY is not configured")
+
+        model = (payload.model or settings.realtime_model).strip()
+        voice = (payload.voice or settings.realtime_voice).strip()
+
+        session: dict[str, object] = {
+            "type": "realtime",
+            "model": model,
+            "audio": {
+                "output": {
+                    "voice": voice,
+                }
+            },
+        }
+        if payload.instructions:
+            session["instructions"] = payload.instructions.strip()
+
+        session_payload: dict[str, object] = {"session": session}
+
+        req = urllib.request.Request(
+            "https://api.openai.com/v1/realtime/client_secrets",
+            data=json.dumps(session_payload).encode("utf-8"),
+            headers={
+                "Authorization": f"Bearer {settings.openai_api_key}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+
+        try:
+            ssl_ctx = ssl.create_default_context(cafile=certifi.where())
+            with urllib.request.urlopen(req, timeout=20, context=ssl_ctx) as resp:
+                body = json.loads(resp.read().decode("utf-8"))
+            secret = (
+                body.get("value")
+                or body.get("client_secret", {}).get("value")
+                or body.get("secret")
+            )
+            if not isinstance(secret, str) or not secret:
+                raise HTTPException(status_code=502, detail="OpenAI realtime token missing in response")
+
+            logging.info("issued openai realtime token user=%s model=%s voice=%s", username, model, voice)
+            return OpenAIRealtimeTokenResponse(
+                client_secret=secret,
+                model=model,
+                voice=voice,
+            )
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="ignore")
+            logging.exception("openai realtime token failed user=%s", username)
+            raise HTTPException(
+                status_code=502,
+                detail=f"OpenAI realtime token request failed: {exc.code} {detail[:300]}",
+            ) from exc
+        except urllib.error.URLError as exc:
+            logging.exception("openai realtime token network error user=%s", username)
+            raise HTTPException(status_code=502, detail=f"OpenAI realtime token network error: {exc.reason}") from exc
 
     @app.get("/api/metrics")
     async def get_metrics(

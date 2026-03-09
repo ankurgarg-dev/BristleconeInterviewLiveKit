@@ -52,3 +52,13 @@ def build_voice_session() -> AgentSession:
         llm=openai.LLM(model=settings.llm_model),
         tts=openai.TTS(model=settings.tts_model, voice=settings.tts_voice),
     )
+
+
+def build_realtime_session() -> AgentSession:
+    """Realtime speech-to-speech session (no standalone STT/TTS pipeline)."""
+    return AgentSession(
+        llm=openai.realtime.RealtimeModel(
+            model=settings.realtime_model,
+            voice=settings.realtime_voice,
+        ),
+    )

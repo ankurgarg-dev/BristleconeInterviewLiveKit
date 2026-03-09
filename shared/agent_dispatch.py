@@ -43,6 +43,21 @@ def build_dispatch_metadata(agent: str, instructions: str | None = None) -> dict
     return metadata
 
 
+def _dispatch_matches_agent(dispatch: Any, expected_agent: str) -> bool:
+    if getattr(dispatch, "agent_name", "") != settings.dispatch_agent_name:
+        return False
+    raw_metadata = getattr(dispatch, "metadata", None)
+    if not raw_metadata:
+        return False
+    try:
+        parsed = json.loads(raw_metadata)
+    except json.JSONDecodeError:
+        return False
+    if not isinstance(parsed, dict):
+        return False
+    return str(parsed.get("agent", "")).lower() == expected_agent.lower()
+
+
 async def ensure_agent_for_room(
     room: str,
     agent: str,
@@ -70,9 +85,7 @@ async def ensure_agent_for_room(
         human_participants = [p for p in participants.participants if not is_agent_participant(p)]
 
         dispatches = await lk.agent_dispatch.list_dispatch(room)
-        valid_dispatches = [
-            dispatch for dispatch in dispatches if getattr(dispatch, "agent_name", "") == settings.dispatch_agent_name
-        ]
+        valid_dispatches = [dispatch for dispatch in dispatches if _dispatch_matches_agent(dispatch, agent)]
 
         should_create_dispatch = bool(human_participants) and not agent_participants and not valid_dispatches
         if should_create_dispatch:

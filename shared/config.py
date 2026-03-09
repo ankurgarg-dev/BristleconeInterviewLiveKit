@@ -19,12 +19,14 @@ class Settings:
 
     default_agent: str = os.getenv("DEFAULT_AGENT", "assistant")
     dispatch_agent_name: str = os.getenv("DISPATCH_AGENT_NAME", "router")
-    explicit_dispatch: bool = os.getenv("EXPLICIT_DISPATCH", "false").lower() == "true"
+    explicit_dispatch: bool = os.getenv("EXPLICIT_DISPATCH", "true").lower() == "true"
 
     stt_model: str = os.getenv("DEEPGRAM_STT_MODEL", "nova-3")
     llm_model: str = os.getenv("OPENAI_LLM_MODEL", "gpt-4o-mini")
     tts_model: str = os.getenv("OPENAI_TTS_MODEL", "gpt-4o-mini-tts")
     tts_voice: str = os.getenv("OPENAI_TTS_VOICE", "alloy")
+    realtime_model: str = os.getenv("OPENAI_REALTIME_MODEL", "gpt-realtime-mini")
+    realtime_voice: str = os.getenv("OPENAI_REALTIME_VOICE", "alloy")
 
     # API server settings
     api_host: str = os.getenv("API_HOST", "0.0.0.0")

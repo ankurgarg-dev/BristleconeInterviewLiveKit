@@ -31,6 +31,11 @@ export const apiClient = {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
+  createOpenAIRealtimeToken: (payload) =>
+    api('/api/openai/realtime/token', {
+      method: 'POST',
+      body: JSON.stringify(payload || {}),
+    }),
   clientEvent: (event, detail) =>
     api('/api/client-event', {
       method: 'POST',

@@ -33,6 +33,8 @@ Required values:
 
 - `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`
 - `OPENAI_API_KEY`, `DEEPGRAM_API_KEY`
+- Optional realtime tuning: `OPENAI_REALTIME_MODEL`, `OPENAI_REALTIME_VOICE`
+- `EXPLICIT_DISPATCH=true` (recommended, prevents auto-dispatch for every room)
 - `APP_AUTH_USER`, `APP_AUTH_PASSWORD`, `APP_SESSION_SECRET`
 
 3. Install frontend deps:
@@ -123,9 +125,33 @@ Output:
 
 For AI-enabled rooms, dispatch metadata is JSON with:
 
-- `agent`: logical agent name (`assistant` / `support` / `interviewer`)
+- `agent`: logical agent name (`assistant` / `support` / `interviewer` / `realtime` / `observer`)
 - `room_mode`: `human_ai`
 - `instructions`: optional free-form instructions
+
+### `POST /api/openai/realtime/token`
+
+Creates a short-lived OpenAI Realtime client secret for browser WebRTC sessions.
+
+Input:
+
+```json
+{
+  "model": "gpt-realtime-mini",
+  "voice": "alloy",
+  "instructions": "Be concise"
+}
+```
+
+Output:
+
+```json
+{
+  "client_secret": "<ephemeral-secret>",
+  "model": "gpt-realtime-mini",
+  "voice": "alloy"
+}
+```
 
 ## Tests
 

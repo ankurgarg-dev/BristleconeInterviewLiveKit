@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
+import logging
 import os
 import sys
 from pathlib import Path
@@ -11,14 +13,17 @@ from livekit.agents import AgentServer, JobContext, cli, room_io
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+load_dotenv()
+logger = logging.getLogger("app.main")
+
 from agents.assistant.agent import AssistantAgentFactory
 from agents.base.registry import AgentRegistry
 from agents.interviewer.agent import InterviewerAgentFactory
+from agents.observer.agent import ObserverAgentFactory
+from agents.realtime.agent import RealtimeAgentFactory
 from agents.support.agent import SupportAgentFactory
 from shared.config import settings
-from shared.utils import build_voice_session, parse_metadata, select_agent_name
-
-load_dotenv()
+from shared.utils import build_realtime_session, build_voice_session, parse_metadata, select_agent_name
 
 
 def parse_args() -> tuple[str, list[str]]:
@@ -33,13 +38,33 @@ def create_registry() -> AgentRegistry:
     registry.register("assistant", AssistantAgentFactory)
     registry.register("support", SupportAgentFactory)
     registry.register("interviewer", InterviewerAgentFactory)
+    registry.register("realtime", RealtimeAgentFactory)
+    registry.register("observer", ObserverAgentFactory)
     return registry
 
 
 async def rtc_entrypoint(ctx: JobContext) -> None:
-    registry = create_registry()
     dispatch_metadata = parse_metadata(getattr(ctx.job, "metadata", None))
     room_metadata = parse_metadata(getattr(ctx.room, "metadata", None))
+    job_agent_name = getattr(ctx.job, "agent_name", "") or ""
+
+    # Accept only explicit dispatch jobs for this worker.
+    if settings.explicit_dispatch and job_agent_name != settings.dispatch_agent_name:
+        logger.warning(
+            "ignoring dispatch with unexpected job.agent_name=%s expected=%s",
+            job_agent_name,
+            settings.dispatch_agent_name,
+        )
+        ctx.shutdown("Ignoring dispatch with unexpected agent_name")
+        return
+
+    # Ignore wildcard/system dispatches that do not explicitly declare agent metadata.
+    if settings.explicit_dispatch and "agent" not in dispatch_metadata:
+        logger.warning("ignoring dispatch without explicit metadata: %s", getattr(ctx.job, "metadata", None))
+        ctx.shutdown("Ignoring implicit dispatch without explicit agent metadata")
+        return
+
+    registry = create_registry()
 
     default_agent = os.getenv("ACTIVE_AGENT", settings.default_agent)
     agent_name = select_agent_name(
@@ -49,7 +74,17 @@ async def rtc_entrypoint(ctx: JobContext) -> None:
     )
 
     selected_agent = registry.create(agent_name, metadata=dispatch_metadata)
-    session = build_voice_session()
+    if agent_name == "observer":
+        # Presence-only agent mode: no LLM/STT/TTS path in worker.
+        await ctx.connect()
+        try:
+            while True:
+                await asyncio.sleep(3600)
+        except asyncio.CancelledError:
+            return
+        return
+
+    session = build_realtime_session() if agent_name == "realtime" else build_voice_session()
     await session.start(
         agent=selected_agent,
         room=ctx.room,
