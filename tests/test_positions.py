@@ -74,6 +74,13 @@ def test_positions_create_list_update(tmp_path: Path, monkeypatch) -> None:
     assert body["version"] == 2
     assert body["role_title"] == "Staff Backend Engineer"
 
+    deleted = client.delete(f"/api/positions/{created['position_id']}")
+    assert deleted.status_code == 200
+    assert deleted.json()["ok"] is True
+
+    missing = client.get(f"/api/positions/{created['position_id']}")
+    assert missing.status_code == 404
+
 
 def test_positions_extract_from_text_without_openai(monkeypatch) -> None:
     def fake_extract(jd_text: str):

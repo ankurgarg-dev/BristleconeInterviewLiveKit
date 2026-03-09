@@ -13,6 +13,7 @@ import urllib.request
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile
@@ -32,11 +33,21 @@ load_dotenv()
 from shared.agent_dispatch import ensure_agent_for_room, prepare_observer_room
 from app.positions_service import (
     create_position,
+    delete_position,
     extract_position_details,
     extract_text_from_file,
     get_position,
     load_positions,
     update_position,
+)
+from app.candidates_service import (
+    create_candidate,
+    delete_candidate,
+    extract_candidate_details,
+    extract_candidate_from_file,
+    get_candidate,
+    load_candidates,
+    update_candidate,
 )
 from shared.config import settings
 
@@ -157,6 +168,37 @@ class PositionRecord(PositionUpsertRequest):
 
 
 class PositionExtractResponse(PositionUpsertRequest):
+    used_llm: bool
+    warnings: list[str] = Field(default_factory=list)
+
+
+class CandidateCVMetadata(BaseModel):
+    originalName: str = ""
+    storedName: str = ""
+    contentType: str = ""
+    size: int = 0
+
+
+class CandidateUpsertRequest(BaseModel):
+    fullName: str = ""
+    email: str = ""
+    currentTitle: str = ""
+    yearsExperience: float | None = None
+    keySkills: list[str] = Field(default_factory=list)
+    keyProjectHighlights: list[str] = Field(default_factory=list)
+    candidateContext: str = ""
+    cvTextSummary: str = ""
+    cvMetadata: CandidateCVMetadata | None = None
+    screeningCache: dict[str, Any] | None = None
+
+
+class CandidateRecord(CandidateUpsertRequest):
+    id: str
+    createdAt: str
+    updatedAt: str
+
+
+class CandidateExtractResponse(CandidateUpsertRequest):
     used_llm: bool
     warnings: list[str] = Field(default_factory=list)
 
@@ -514,6 +556,17 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail="position not found")
         return PositionRecord(**updated)
 
+    @app.delete("/api/positions/{position_id}")
+    async def delete_existing_position(
+        position_id: str,
+        username: str = Depends(require_session_user),
+    ) -> dict[str, bool]:
+        _ = username
+        deleted = delete_position(position_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="position not found")
+        return {"ok": True}
+
     @app.post("/api/positions/extract", response_model=PositionExtractResponse)
     async def extract_position_payload(
         jd_text: str | None = Form(default=None),
@@ -546,6 +599,88 @@ def create_app() -> FastAPI:
         merged_jd_text = "\n\n".join(jd_parts).strip()
         extracted, used_llm, warnings = extract_position_details(merged_jd_text)
         return PositionExtractResponse(**extracted, used_llm=used_llm, warnings=warnings)
+
+    @app.get("/api/candidates", response_model=list[CandidateRecord])
+    async def list_all_candidates(username: str = Depends(require_session_user)) -> list[CandidateRecord]:
+        _ = username
+        return [CandidateRecord(**row) for row in load_candidates()]
+
+    @app.get("/api/candidates/{candidate_id}", response_model=CandidateRecord)
+    async def get_candidate_by_id(
+        candidate_id: str,
+        username: str = Depends(require_session_user),
+    ) -> CandidateRecord:
+        _ = username
+        row = get_candidate(candidate_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="candidate not found")
+        return CandidateRecord(**row)
+
+    @app.post("/api/candidates", response_model=CandidateRecord)
+    async def create_new_candidate(
+        payload: CandidateUpsertRequest,
+        username: str = Depends(require_session_user),
+    ) -> CandidateRecord:
+        _ = username
+        created = create_candidate(payload.model_dump())
+        return CandidateRecord(**created)
+
+    @app.put("/api/candidates/{candidate_id}", response_model=CandidateRecord)
+    async def update_existing_candidate(
+        candidate_id: str,
+        payload: CandidateUpsertRequest,
+        username: str = Depends(require_session_user),
+    ) -> CandidateRecord:
+        _ = username
+        updated = update_candidate(candidate_id, payload.model_dump())
+        if updated is None:
+            raise HTTPException(status_code=404, detail="candidate not found")
+        return CandidateRecord(**updated)
+
+    @app.delete("/api/candidates/{candidate_id}")
+    async def delete_existing_candidate(
+        candidate_id: str,
+        username: str = Depends(require_session_user),
+    ) -> dict[str, bool]:
+        _ = username
+        deleted = delete_candidate(candidate_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="candidate not found")
+        return {"ok": True}
+
+    @app.post("/api/candidates/extract", response_model=CandidateExtractResponse)
+    async def extract_candidate_payload(
+        cv_text: str | None = Form(default=None),
+        file: UploadFile | None = File(default=None),
+        username: str = Depends(require_session_user),
+    ) -> CandidateExtractResponse:
+        _ = username
+        text_parts: list[str] = []
+        cv_metadata: dict[str, Any] | None = None
+
+        if file is not None:
+            raw = await file.read()
+            if not raw:
+                raise HTTPException(status_code=400, detail="uploaded file is empty")
+            try:
+                extracted_text, cv_metadata = extract_candidate_from_file(file.filename or "candidate.txt", raw)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            except Exception as exc:  # noqa: BLE001
+                raise HTTPException(status_code=400, detail=f"unable to parse uploaded file: {exc}") from exc
+            if extracted_text.strip():
+                text_parts.append(extracted_text.strip())
+
+        if cv_text and cv_text.strip():
+            text_parts.append(cv_text.strip())
+
+        if not text_parts:
+            raise HTTPException(status_code=400, detail="provide cv_text or a valid file")
+
+        merged_text = "\n\n".join(text_parts).strip()
+        extracted, used_llm, warnings = extract_candidate_details(merged_text)
+        payload = {**extracted, "cvMetadata": cv_metadata}
+        return CandidateExtractResponse(**payload, used_llm=used_llm, warnings=warnings)
 
     @app.get("/api/metrics")
     async def get_metrics(

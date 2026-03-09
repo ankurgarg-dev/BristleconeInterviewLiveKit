@@ -84,6 +84,10 @@ export const apiClient = {
       method: 'PUT',
       body: JSON.stringify(payload),
     }),
+  deletePosition: (positionId) =>
+    api(`/api/positions/${encodeURIComponent(positionId)}`, {
+      method: 'DELETE',
+    }),
   extractPosition: async ({ jdText, file }) => {
     const formData = new FormData();
     if (jdText?.trim()) formData.append('jd_text', jdText.trim());
@@ -97,6 +101,40 @@ export const apiClient = {
       const body = await response.json().catch(() => ({}));
       if (response.status === 404) {
         throw new Error('positions extract API not found. Restart backend API server and try again.');
+      }
+      throw new Error(body.detail || `request failed: ${response.status}`);
+    }
+    return response.json();
+  },
+  listCandidates: () => api('/api/candidates', { method: 'GET' }),
+  getCandidate: (candidateId) => api(`/api/candidates/${encodeURIComponent(candidateId)}`, { method: 'GET' }),
+  createCandidate: (payload) =>
+    api('/api/candidates', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  updateCandidate: (candidateId, payload) =>
+    api(`/api/candidates/${encodeURIComponent(candidateId)}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    }),
+  deleteCandidate: (candidateId) =>
+    api(`/api/candidates/${encodeURIComponent(candidateId)}`, {
+      method: 'DELETE',
+    }),
+  extractCandidate: async ({ cvText, file }) => {
+    const formData = new FormData();
+    if (cvText?.trim()) formData.append('cv_text', cvText.trim());
+    if (file) formData.append('file', file);
+    const response = await fetch(`${API_BASE_URL}/api/candidates/extract`, {
+      method: 'POST',
+      credentials: 'include',
+      body: formData,
+    });
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      if (response.status === 404) {
+        throw new Error('candidates extract API not found. Restart backend API server and try again.');
       }
       throw new Error(body.detail || `request failed: ${response.status}`);
     }

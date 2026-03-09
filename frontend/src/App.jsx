@@ -23,6 +23,7 @@ import { apiClient } from './api';
 import { AgentAudioVisualizerAura } from './components/agents-ui/agent-audio-visualizer-aura';
 import { AgentAudioVisualizerRadial } from './components/agents-ui/agent-audio-visualizer-radial';
 import { AgentAudioVisualizerWave } from './components/agents-ui/agent-audio-visualizer-wave';
+import { CandidatesPage } from './components/CandidatesPage';
 import { PositionsPage } from './components/PositionsPage';
 import authBackground from './assets/Background.png';
 import authCam from './assets/Cam.png';
@@ -1207,10 +1208,7 @@ function HomePage({ user, tokenInfo, defaultRoom, onJoin, onLeaveMeeting, onLogo
             <PositionsPage />
           )}
           {activeMenu === 'candidates' && (
-            <PlaceholderPage
-              title="Candidates"
-              description="Track candidate profiles, status, and recruiter notes."
-            />
+            <CandidatesPage />
           )}
           {activeMenu === 'interviews' && (
             <PlaceholderPage

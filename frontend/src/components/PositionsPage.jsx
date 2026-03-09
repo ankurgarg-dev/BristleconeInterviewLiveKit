@@ -64,6 +64,7 @@ export function PositionsPage() {
   const [positions, setPositions] = useState([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [extracting, setExtracting] = useState(false);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
@@ -185,6 +186,29 @@ export function PositionsPage() {
       setError(err.message);
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function deleteSelectedPosition() {
+    if (!editingId || deleting) return;
+    const ok =
+      typeof window === 'undefined' || typeof window.confirm !== 'function'
+        ? true
+        : window.confirm('Delete this position? This cannot be undone.');
+    if (!ok) return;
+
+    setDeleting(true);
+    setError('');
+    setMessage('');
+    try {
+      await apiClient.deletePosition(editingId);
+      resetToCreate();
+      await loadPositions();
+      setMessage('Position deleted.');
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setDeleting(false);
     }
   }
 
@@ -351,9 +375,21 @@ export function PositionsPage() {
               </p>
             )}
 
-            <button type="submit" disabled={saving}>
-              {saving ? 'Saving...' : isEditMode ? 'Update Position' : 'Create Position'}
-            </button>
+            <div className="form-actions-row">
+              <button type="submit" disabled={saving || deleting}>
+                {saving ? 'Saving...' : isEditMode ? 'Update Position' : 'Create Position'}
+              </button>
+              {isEditMode && (
+                <button
+                  type="button"
+                  className="danger-button"
+                  onClick={deleteSelectedPosition}
+                  disabled={saving || deleting}
+                >
+                  {deleting ? 'Deleting...' : 'Delete'}
+                </button>
+              )}
+            </div>
           </form>
 
           {message && <p className="helper-note">{message}</p>}

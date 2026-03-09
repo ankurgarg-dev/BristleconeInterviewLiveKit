@@ -476,6 +476,16 @@ def update_position(position_id: str, payload: dict[str, Any]) -> dict[str, Any]
     return None
 
 
+def delete_position(position_id: str) -> bool:
+    with _positions_lock:
+        positions = load_positions()
+        remaining = [row for row in positions if row.get("position_id") != position_id]
+        if len(remaining) == len(positions):
+            return False
+        _write_positions(remaining)
+        return True
+
+
 def extract_text_from_file(filename: str, raw_bytes: bytes) -> str:
     suffix = Path(filename).suffix.lower()
 
