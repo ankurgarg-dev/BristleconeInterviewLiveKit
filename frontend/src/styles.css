@@ -2,6 +2,12 @@
   font-family: 'IBM Plex Sans', ui-sans-serif, system-ui, -apple-system;
   color: #102027;
   background: radial-gradient(circle at top left, #d9f4ff, #f6fbff 45%, #eef6ef);
+  --aura-main-1: #21a6bd;
+  --aura-main-2: #4bc984;
+  --aura-secondary-1: #e05e00;
+  --aura-secondary-2: #fcde0f;
+  --aura-secondary-3: #68125e;
+  --aura-secondary-4: #bf0d3f;
 }
 
 * {
@@ -109,6 +115,129 @@ button:disabled {
 
 .meeting-main {
   min-height: 0;
+  position: relative;
+}
+
+.standard-participant-tile,
+.interview-aura-tile {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 220px;
+  overflow: hidden;
+  border-radius: 1rem;
+}
+
+.standard-participant-tile video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.tile-fallback {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle at 28% 24%, #264c5c 0%, #14242d 60%, #0b171d 100%);
+}
+
+.standard-participant-meta,
+.interview-aura-meta {
+  position: absolute;
+  left: 0.7rem;
+  bottom: 0.7rem;
+  border-radius: 0.75rem;
+  padding: 0.35rem 0.55rem;
+  background: rgba(10, 15, 19, 0.58);
+  color: #eef8fd;
+  display: inline-flex;
+  gap: 0.45rem;
+  align-items: center;
+  font-size: 0.78rem;
+  backdrop-filter: blur(5px);
+  z-index: 3;
+}
+
+.interview-aura-meta small {
+  text-transform: capitalize;
+  color: var(--aura-secondary-2);
+}
+
+.interview-aura-tile {
+  display: grid;
+  place-items: center;
+  background:
+    radial-gradient(circle at 30% 24%, rgba(75, 201, 132, 0.12), transparent 45%),
+    radial-gradient(circle at 74% 32%, rgba(224, 94, 0, 0.12), transparent 45%),
+    linear-gradient(160deg, #040f16 0%, #07141c 56%, #0a1b1a 100%);
+}
+
+.interview-aura-official {
+  width: min(72%, 420px);
+  max-width: 420px;
+  min-width: 180px;
+  z-index: 1;
+}
+
+.observer-orb-tile {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 220px;
+  border-radius: 1rem;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  background:
+    radial-gradient(circle at 28% 18%, rgba(126, 216, 236, 0.22), transparent 42%),
+    radial-gradient(circle at 80% 22%, rgba(91, 211, 158, 0.2), transparent 46%),
+    linear-gradient(165deg, #061018 0%, #0a1a24 58%, #06141a 100%);
+}
+
+.observer-wave {
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  opacity: 0.95;
+  display: block;
+}
+
+.realtime-wave {
+  position: absolute;
+  inset: 0;
+}
+
+.observer-aura-shell {
+  position: absolute;
+  inset: 0;
+  padding: 0.5rem;
+  display: grid;
+  place-items: center;
+  container-type: size;
+}
+
+.observer-aura {
+  width: min(100cqw, 100cqh);
+  height: min(100cqw, 100cqh);
+}
+
+.observer-aura > div {
+  width: 100%;
+  height: 100%;
+}
+
+.interviewer-radial-shell {
+  position: absolute;
+  inset: 0;
+  padding: 0.5rem;
+  display: grid;
+  place-items: center;
+  container-type: size;
+}
+
+.interviewer-radial {
+  position: relative;
+  width: min(100cqw, 100cqh);
+  height: min(100cqw, 100cqh);
 }
 
 .sidebar {
