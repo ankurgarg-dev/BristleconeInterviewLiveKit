@@ -51,7 +51,8 @@ export function useAgentAudioVisualizerWave({
 
   const volume = useTrackVolume(audioTrack as TrackReference, {
     fftSize: 512,
-    smoothingTimeConstant: 0.55,
+    // Slightly lower smoothing makes speech transients more visible.
+    smoothingTimeConstant: 0.4,
   });
 
   useEffect(() => {
@@ -63,9 +64,9 @@ export function useAgentAudioVisualizerWave({
         animateOpacity(1.0, DEFAULT_TRANSITION);
         return;
       case 'listening':
-        setSpeed(DEFAULT_SPEED);
+        setSpeed(DEFAULT_SPEED * 1.3);
         animateAmplitude(DEFAULT_AMPLITUDE, DEFAULT_TRANSITION);
-        animateFrequency(DEFAULT_FREQUENCY, DEFAULT_TRANSITION);
+        animateFrequency(DEFAULT_FREQUENCY * 0.9, DEFAULT_TRANSITION);
         animateOpacity([1.0, 0.3], {
           duration: 0.75,
           repeat: Infinity,
@@ -98,6 +99,13 @@ export function useAgentAudioVisualizerWave({
     if (state === 'speaking') {
       animateAmplitude(0.015 + 0.4 * volume, { duration: 0 });
       animateFrequency(20 + 60 * volume, { duration: 0 });
+      return;
+    }
+    if (state === 'listening') {
+      // Listening (user speaking): broader, slower modulation than assistant speaking.
+      const energy = Math.pow(Math.max(0, volume), 0.65);
+      animateAmplitude(0.022 + 0.5 * energy, { duration: 0 });
+      animateFrequency(8 + 18 * energy, { duration: 0 });
     }
   }, [state, volume, animateAmplitude, animateFrequency]);
 

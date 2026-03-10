@@ -71,7 +71,7 @@ function fromCandidate(candidate) {
   };
 }
 
-export function CandidatesPage() {
+export function CandidatesPage({ onCreateApplication }) {
   const [candidates, setCandidates] = useState([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -395,6 +395,16 @@ export function CandidatesPage() {
               <button type="submit" disabled={saving || deleting}>
                 {saving ? 'Saving...' : isEditMode ? 'Update Candidate' : 'Create Candidate'}
               </button>
+              {isEditMode && (
+                <button
+                  type="button"
+                  className="secondary-button"
+                  onClick={() => onCreateApplication?.({ candidateId: editingId })}
+                  disabled={saving || deleting}
+                >
+                  Create Application
+                </button>
+              )}
               {isEditMode && (
                 <button
                   type="button"

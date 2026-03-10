@@ -60,7 +60,7 @@ function confidencePercent(value) {
   return `${Math.round(Math.max(0, Math.min(1, value)) * 100)}%`;
 }
 
-export function PositionsPage() {
+export function PositionsPage({ onCreateApplication }) {
   const [positions, setPositions] = useState([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -379,6 +379,16 @@ export function PositionsPage() {
               <button type="submit" disabled={saving || deleting}>
                 {saving ? 'Saving...' : isEditMode ? 'Update Position' : 'Create Position'}
               </button>
+              {isEditMode && (
+                <button
+                  type="button"
+                  className="secondary-button"
+                  onClick={() => onCreateApplication?.({ positionId: editingId })}
+                  disabled={saving || deleting}
+                >
+                  Create Application
+                </button>
+              )}
               {isEditMode && (
                 <button
                   type="button"

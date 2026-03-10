@@ -80,23 +80,38 @@ async def ensure_agent_for_room(
         api_secret=settings.livekit_api_secret,
     ) as lk:
         rooms = await lk.room.list_rooms(ListRoomsRequest(names=[room]))
-        if not rooms.rooms:
+        room_exists = bool(rooms.rooms)
+
+        # Dispatch can be created before room creation; this is important because
+        # token issuance often happens before first participant is visible.
+        dispatches = await lk.agent_dispatch.list_dispatch(room)
+        valid_dispatches = [dispatch for dispatch in dispatches if _dispatch_matches_agent(dispatch, agent)]
+
+        if not room_exists:
+            should_create_dispatch = not valid_dispatches
+            if should_create_dispatch:
+                await lk.agent_dispatch.create_dispatch(
+                    CreateAgentDispatchRequest(
+                        agent_name=settings.dispatch_agent_name,
+                        room=room,
+                        metadata=json.dumps(metadata),
+                    )
+                )
             return EnsureAgentResult(
                 room_exists=False,
                 has_humans=False,
                 has_agent=False,
-                had_valid_dispatch=False,
-                created_dispatch=False,
+                had_valid_dispatch=bool(valid_dispatches),
+                created_dispatch=should_create_dispatch,
             )
 
         participants = await lk.room.list_participants(ListParticipantsRequest(room=room))
         agent_participants = [p for p in participants.participants if is_agent_participant(p)]
         human_participants = [p for p in participants.participants if not is_agent_participant(p)]
 
-        dispatches = await lk.agent_dispatch.list_dispatch(room)
-        valid_dispatches = [dispatch for dispatch in dispatches if _dispatch_matches_agent(dispatch, agent)]
-
-        should_create_dispatch = bool(human_participants) and not agent_participants and not valid_dispatches
+        # Create dispatch as soon as room exists and we don't already have agent/dispatch.
+        # Token issuance often happens before the human participant is visible in room participant list.
+        should_create_dispatch = not agent_participants and not valid_dispatches
         if should_create_dispatch:
             await lk.agent_dispatch.create_dispatch(
                 CreateAgentDispatchRequest(

@@ -11,6 +11,7 @@ import threading
 from datetime import UTC, datetime
 from pathlib import Path
 
+import certifi
 from dotenv import load_dotenv
 from livekit.agents import AgentServer, JobContext, JobExecutorType, cli, room_io
 
@@ -171,10 +172,13 @@ async def rtc_entrypoint(ctx: JobContext) -> None:
             delete_room_on_close=True,
         ),
     )
-    await session.say(
-        "Hi, I am connected and listening. You can start speaking now.",
-        allow_interruptions=True,
-    )
+    # Realtime sessions do not include a standalone TTS model, so calling
+    # session.say() raises runtime errors and tears down the job.
+    if agent_name != "realtime":
+        await session.say(
+            "Hi, I am connected and listening. You can start speaking now.",
+            allow_interruptions=True,
+        )
 
 
 def build_server() -> AgentServer:
@@ -199,6 +203,9 @@ def build_server() -> AgentServer:
 
 def main() -> None:
     selected_agent, passthrough = parse_args()
+    # Ensure outbound TLS (including aiohttp inside OpenAI realtime plugin)
+    # can find a CA bundle in managed/local Python environments.
+    os.environ.setdefault("SSL_CERT_FILE", certifi.where())
     os.environ["LIVEKIT_URL"] = settings.livekit_url
     os.environ["LIVEKIT_API_KEY"] = settings.livekit_api_key
     os.environ["LIVEKIT_API_SECRET"] = settings.livekit_api_secret

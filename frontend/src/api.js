@@ -140,4 +140,35 @@ export const apiClient = {
     }
     return response.json();
   },
+  listApplications: () => api('/api/applications', { method: 'GET' }),
+  getApplication: (applicationId) => api(`/api/applications/${encodeURIComponent(applicationId)}`, { method: 'GET' }),
+  createApplication: (payload) =>
+    api('/api/applications', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  updateApplication: (applicationId, payload) =>
+    api(`/api/applications/${encodeURIComponent(applicationId)}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    }),
+  deleteApplication: (applicationId) =>
+    api(`/api/applications/${encodeURIComponent(applicationId)}`, {
+      method: 'DELETE',
+    }),
+  screenApplication: (applicationId) =>
+    api(`/api/applications/${encodeURIComponent(applicationId)}/screen`, {
+      method: 'POST',
+    }),
+  screenApplicationPreview: (payload) =>
+    api('/api/applications/screen-preview', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  scheduleInterview: (applicationId, payload) =>
+    api(`/api/applications/${encodeURIComponent(applicationId)}/schedule-interview`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  listInterviews: () => api('/api/interviews', { method: 'GET' }),
 };

@@ -340,6 +340,8 @@ function AgentWaveTileContent({
     isVoiceAssistantAgent || explicitMatch || (isRemoteAgent && allowGenericAgentMatch);
   const localParticipant = participants.find((p) => p.isLocal);
   const userSpeaking = localParticipant?.isSpeaking ?? false;
+  const observerAssistantSpeaking = assistantSpeaking || status === 'Assistant speaking';
+  const localMicTrack = localParticipant?.getTrackPublication?.(Track.Source.Microphone)?.track;
 
   let derivedStatus = status || '';
   if (targetAgent === 'realtime' || targetAgent === 'assistant') {
@@ -391,12 +393,12 @@ function AgentWaveTileContent({
       let observerAuraState = mapObserverStatusToAuraState(status);
       // Observer speaking detection is sourced from direct remote audio activity.
       if (observerAuraState !== 'connecting' && observerAuraState !== 'disconnected') {
-        if (assistantSpeaking) observerAuraState = 'speaking';
+        if (observerAssistantSpeaking) observerAuraState = 'speaking';
         else if (userSpeaking) observerAuraState = 'listening';
         else observerAuraState = 'thinking';
       }
       return (
-        <div className="observer-orb-tile">
+        <div className={`observer-orb-tile observer-state-${observerAuraState}`}>
           <div className="observer-aura-shell">
             <AgentAudioVisualizerAura
               state={observerAuraState}
@@ -405,6 +407,28 @@ function AgentWaveTileContent({
               colorShift={2}
               themeMode="dark"
               className="observer-aura"
+            />
+          </div>
+          <div className="standard-participant-meta">{participant.name || participant.identity}</div>
+        </div>
+      );
+    }
+    if (targetAgent === 'assistant') {
+      const assistantWaveState = participant.isSpeaking ? 'speaking' : userSpeaking ? 'listening' : 'thinking';
+      const assistantWaveColor = assistantWaveState === 'listening' ? '#4BC984' : '#21A6BD';
+      const assistantWaveAudioTrack =
+        assistantWaveState === 'listening' ? localMicTrack || voiceAudioTrack : voiceAudioTrack;
+      return (
+        <div className={`observer-orb-tile assistant-state-${assistantWaveState}`}>
+          <div className="assistant-wave-shell">
+            <AgentAudioVisualizerWave
+              state={assistantWaveState}
+              audioTrack={assistantWaveAudioTrack}
+              color={assistantWaveColor}
+              colorShift={assistantWaveState === 'listening' ? 0.2 : 0.06}
+              lineWidth={assistantWaveState === 'listening' ? 3 : 2.2}
+              blur={assistantWaveState === 'listening' ? 0.5 : 0.7}
+              className="assistant-wave"
             />
           </div>
           <div className="standard-participant-meta">{participant.name || participant.identity}</div>
@@ -460,11 +484,15 @@ function AgentWaveConference({
     return id.startsWith('agent-') || id.includes('observer');
   });
   const showObserverFallbackTile = targetAgent === 'observer' && !hasObserverAgentTile;
+  const userSpeaking = participants.some((p) => p.isLocal && p.isSpeaking);
+  const observerAssistantSpeaking = assistantSpeaking || status === 'Assistant speaking';
   const observerFallbackState = (() => {
     const mapped = mapObserverStatusToAuraState(status);
     if (mapped === 'connecting' || mapped === 'disconnected') return mapped;
-    if (assistantSpeaking) return 'speaking';
-    return 'listening';
+    if (observerAssistantSpeaking) return 'speaking';
+    if (userSpeaking) return 'listening';
+    // Idle visual when neither user nor assistant is actively speaking.
+    return 'thinking';
   })();
   const localTrackRef = tracks.find((t) => isTrackReference(t) && t.participant?.isLocal) || null;
   const localParticipant = participants.find((p) => p.isLocal) || null;
@@ -474,13 +502,26 @@ function AgentWaveConference({
       <div className="lk-video-conference-inner">
         {showObserverFallbackTile ? (
           <div className="observer-dual-layout">
-            <div className="standard-participant-tile">
-              {localTrackRef ? <VideoTrack trackRef={localTrackRef} /> : <div className="tile-fallback" />}
-              <div className="standard-participant-meta">
-                {localParticipant?.name || localParticipant?.identity || 'You'}
+            {localTrackRef ? (
+              <ParticipantTile trackRef={localTrackRef} className="observer-local-participant-tile">
+                <AgentWaveTileContent
+                  targetAgent={targetAgent}
+                  status={status}
+                  audioElement={audioElement}
+                  micStream={micStream}
+                  micEnabled={micEnabled}
+                  assistantSpeaking={assistantSpeaking}
+                />
+              </ParticipantTile>
+            ) : (
+              <div className="standard-participant-tile">
+                <div className="tile-fallback" />
+                <div className="standard-participant-meta">
+                  {localParticipant?.name || localParticipant?.identity || 'You'}
+                </div>
               </div>
-            </div>
-            <div className="observer-orb-tile">
+            )}
+            <div className={`observer-orb-tile observer-state-${observerFallbackState}`}>
               <div className="observer-aura-shell">
                 <AgentAudioVisualizerAura
                   state={observerFallbackState}

@@ -198,6 +198,31 @@ button:disabled {
 .meeting-main {
   min-height: 0;
   position: relative;
+  display: flex;
+  flex-direction: column;
+}
+
+.meeting-main .lk-video-conference,
+.meeting-main .lk-video-conference-inner {
+  height: 100%;
+  min-height: 0;
+}
+
+.meeting-main .lk-video-conference-inner {
+  display: flex;
+  flex-direction: column;
+}
+
+.meeting-main .lk-grid-layout-wrapper,
+.meeting-main .observer-dual-layout {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.meeting-main .lk-control-bar,
+.meeting-main .lk-agent-control-bar {
+  margin-top: auto;
+  padding-bottom: max(0.25rem, env(safe-area-inset-bottom));
 }
 
 .standard-participant-tile,
@@ -273,6 +298,48 @@ button:disabled {
     radial-gradient(circle at 28% 18%, rgba(126, 216, 236, 0.22), transparent 42%),
     radial-gradient(circle at 80% 22%, rgba(91, 211, 158, 0.2), transparent 46%),
     linear-gradient(165deg, #061018 0%, #0a1a24 58%, #06141a 100%);
+}
+
+.observer-orb-tile::before {
+  content: '';
+  position: absolute;
+  inset: -14%;
+  pointer-events: none;
+  border-radius: 50%;
+  opacity: 0;
+  filter: blur(20px);
+  transition: opacity 180ms ease, transform 180ms ease;
+}
+
+.observer-state-speaking::before {
+  opacity: 0.72;
+  transform: scale(1.06);
+  background: radial-gradient(circle, rgba(33, 166, 189, 0.62) 0%, rgba(75, 201, 132, 0.2) 60%, transparent 82%);
+}
+
+.observer-state-listening::before {
+  opacity: 0.34;
+  transform: scale(1.01);
+  background: radial-gradient(circle, rgba(33, 166, 189, 0.38) 0%, rgba(75, 201, 132, 0.14) 60%, transparent 82%);
+}
+
+.observer-state-thinking::before {
+  opacity: 0.12;
+  transform: scale(0.98);
+  background: radial-gradient(circle, rgba(33, 166, 189, 0.18) 0%, transparent 78%);
+}
+
+.assistant-wave-shell {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 0.6rem;
+}
+
+.assistant-wave {
+  width: min(94%, 740px);
+  height: min(34%, 170px);
 }
 
 .observer-dual-layout {
@@ -592,10 +659,69 @@ button:disabled {
   background: #c73535;
 }
 
+.secondary-button {
+  background: #ffffff;
+  color: #1d5a6a;
+  border: 1px solid #9dc2cb;
+}
+
 .positions-meta {
   margin: 0;
   color: #3d5d68;
   font-size: 0.86rem;
+}
+
+.application-section {
+  margin-top: 0.75rem;
+  border-top: 1px solid #e3edf1;
+  padding-top: 0.75rem;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.application-section h4 {
+  margin: 0;
+  color: #14323b;
+}
+
+.application-screening,
+.application-interview-card {
+  border: 1px solid #dbe8ee;
+  border-radius: 0.7rem;
+  background: #f8fcfd;
+  padding: 0.65rem;
+}
+
+.application-screening p,
+.application-interview-card p {
+  margin: 0 0 0.45rem;
+}
+
+.interview-actions {
+  display: flex;
+  gap: 0.45rem;
+}
+
+.interview-actions-secondary {
+  margin-top: 0.35rem;
+}
+
+.interview-actions button {
+  width: auto;
+  min-width: 84px;
+  padding: 0.5rem 0.65rem;
+}
+
+.icon-action-btn {
+  min-width: 34px !important;
+  width: 34px !important;
+  height: 30px;
+  padding: 0 !important;
+  display: inline-grid;
+  place-items: center;
+  font-size: 0.95rem;
+  line-height: 1;
+  border-radius: 0.45rem;
 }
 
 @media (max-width: 900px) {
@@ -670,6 +796,11 @@ button:disabled {
   .meeting-shell {
     grid-template-columns: 1fr;
     grid-template-rows: 1fr auto;
+  }
+
+  .meeting-main .lk-control-bar,
+  .meeting-main .lk-agent-control-bar {
+    padding-bottom: max(0.15rem, env(safe-area-inset-bottom));
   }
 
   .sidebar {

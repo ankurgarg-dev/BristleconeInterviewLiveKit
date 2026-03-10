@@ -1,12 +1,35 @@
 from __future__ import annotations
 
 import json
+import ssl
 from typing import Any
 
+import aiohttp
+import certifi
 from livekit.agents import AgentSession
 from livekit.plugins import deepgram, openai, silero
 
 from shared.config import settings
+
+_realtime_http_sessions_by_loop: dict[int, aiohttp.ClientSession] = {}
+
+
+def _get_realtime_http_session() -> aiohttp.ClientSession:
+    try:
+        import asyncio
+
+        loop_id = id(asyncio.get_running_loop())
+    except RuntimeError:
+        loop_id = -1
+
+    session = _realtime_http_sessions_by_loop.get(loop_id)
+    if session is None or session.closed:
+        ssl_ctx = ssl.create_default_context(cafile=certifi.where())
+        connector = aiohttp.TCPConnector(ssl=ssl_ctx)
+        session = aiohttp.ClientSession(connector=connector, trust_env=True)
+        _realtime_http_sessions_by_loop[loop_id] = session
+
+    return session
 
 
 def parse_metadata(raw: str | None) -> dict[str, Any]:
@@ -60,5 +83,6 @@ def build_realtime_session() -> AgentSession:
         llm=openai.realtime.RealtimeModel(
             model=settings.realtime_model,
             voice=settings.realtime_voice,
+            http_session=_get_realtime_http_session(),
         ),
     )
