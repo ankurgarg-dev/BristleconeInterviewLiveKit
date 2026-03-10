@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import json
 import re
@@ -21,7 +22,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
+from livekit import api
 from livekit.api import AccessToken, VideoGrants
+from livekit.protocol.room import CreateRoomRequest, ListRoomsRequest, UpdateRoomMetadataRequest
 from pydantic import BaseModel, Field
 import certifi
 
@@ -49,6 +52,15 @@ from app.candidates_service import (
     load_candidates,
     update_candidate,
 )
+from app.applications_service import (
+    build_interview,
+    create_application,
+    delete_application,
+    get_application,
+    load_applications,
+    screen_application,
+    update_application,
+)
 from shared.config import settings
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -70,6 +82,19 @@ class Metrics:
 metrics = Metrics(started_at=time.time())
 transcript_lock = threading.Lock()
 transcript_seen_keys: dict[str, set[str]] = {}
+dispatch_reconcile_tasks: dict[str, asyncio.Task[None]] = {}
+dispatch_room_locks: dict[str, asyncio.Lock] = {}
+# Keep token issuance snappy even when AgentDispatchService is unhealthy.
+DISPATCH_SYNC_TIMEOUT_SECONDS = 0.8
+
+
+def _dispatch_room_lock(room: str) -> asyncio.Lock:
+    room_key = room.strip().lower()
+    lock = dispatch_room_locks.get(room_key)
+    if lock is None:
+        lock = asyncio.Lock()
+        dispatch_room_locks[room_key] = lock
+    return lock
 
 
 class LoginRequest(BaseModel):
@@ -203,6 +228,225 @@ class CandidateExtractResponse(CandidateUpsertRequest):
     warnings: list[str] = Field(default_factory=list)
 
 
+class ApplicationScreening(BaseModel):
+    score: float | None = None
+    overall_match_score: float | None = None
+    justification: str = ""
+    matched_skills: list[str] = Field(default_factory=list)
+    missing_skills: list[str] = Field(default_factory=list)
+    strengths: list[str] = Field(default_factory=list)
+    risks: list[str] = Field(default_factory=list)
+    job_requirements_summary: dict[str, Any] = Field(default_factory=dict)
+    candidate_profile_summary: dict[str, Any] = Field(default_factory=dict)
+    match_analysis: dict[str, Any] = Field(default_factory=dict)
+    score_breakdown: dict[str, float] = Field(default_factory=dict)
+    hiring_recommendation: str = ""
+    hiring_reasoning: list[str] = Field(default_factory=list)
+    interview_questions: list[str] = Field(default_factory=list)
+    report: str = ""
+    used_llm: bool = False
+    updated_at: str = ""
+
+
+class ApplicationInterview(BaseModel):
+    room: str = ""
+    scheduled_for: str | None = None
+    stage: str = "technical_screen"
+    status: str = "scheduled"
+    agent: str = "interviewer"
+    notes: str = ""
+    updated_at: str = ""
+    happened: bool = False
+    transcript_available: bool = False
+    transcript_line_count: int = 0
+
+
+class ApplicationPositionSnapshot(BaseModel):
+    position_id: str = ""
+    role_title: str = ""
+    level: str = ""
+    must_haves: list[str] = Field(default_factory=list)
+    tech_stack: list[str] = Field(default_factory=list)
+
+
+class ApplicationCandidateSnapshot(BaseModel):
+    candidate_id: str = ""
+    fullName: str = ""
+    email: str = ""
+    currentTitle: str = ""
+    yearsExperience: float | None = None
+    keySkills: list[str] = Field(default_factory=list)
+
+
+class ApplicationUpsertRequest(BaseModel):
+    position_id: str = ""
+    candidate_id: str = ""
+    status: str = "applied"
+    source: str = "manual"
+    notes: str = ""
+    screening: ApplicationScreening | None = None
+    interview: ApplicationInterview | None = None
+    interviews: list[ApplicationInterview] = Field(default_factory=list)
+    position_snapshot: ApplicationPositionSnapshot | None = None
+    candidate_snapshot: ApplicationCandidateSnapshot | None = None
+
+
+class ApplicationRecord(ApplicationUpsertRequest):
+    application_id: str
+    created_by: str
+    created_at: str
+    updated_at: str
+    version: int
+    interview_happened: bool = False
+    delete_allowed: bool = True
+
+
+class ApplicationScreenResponse(BaseModel):
+    application: ApplicationRecord
+    used_llm: bool
+    warnings: list[str] = Field(default_factory=list)
+
+
+class ApplicationScreenPreviewRequest(BaseModel):
+    position_id: str
+    candidate_id: str
+
+
+class ApplicationScreenPreviewResponse(BaseModel):
+    screening: ApplicationScreening
+    used_llm: bool
+    warnings: list[str] = Field(default_factory=list)
+
+
+class ScheduleInterviewRequest(BaseModel):
+    scheduled_for: str | None = None
+    stage: str | None = None
+    agent: str = "interviewer"
+    notes: str = ""
+
+
+def _transcript_line_count_for_room(room: str) -> int:
+    normalized_room = str(room or "").strip()
+    if not normalized_room:
+        return 0
+    path = _transcript_file_path(normalized_room)
+    if not path.exists():
+        return 0
+    count = 0
+    with path.open("r", encoding="utf-8") as fp:
+        for raw in fp:
+            if raw.strip():
+                count += 1
+    return count
+
+
+def _enrich_interview_runtime(interview: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(interview, dict):
+        return None
+    room = str(interview.get("room") or "").strip()
+    if not room:
+        return None
+    line_count = _transcript_line_count_for_room(room)
+    enriched = {**interview}
+    enriched["transcript_line_count"] = line_count
+    enriched["transcript_available"] = line_count > 0
+    enriched["happened"] = line_count > 0
+    return enriched
+
+
+def _enrich_application_runtime(row: dict[str, Any]) -> dict[str, Any]:
+    enriched = {**row}
+    interviews = row.get("interviews") if isinstance(row.get("interviews"), list) else []
+    enriched_interviews: list[dict[str, Any]] = []
+    for item in interviews:
+        runtime_item = _enrich_interview_runtime(item if isinstance(item, dict) else None)
+        if runtime_item is not None:
+            enriched_interviews.append(runtime_item)
+
+    latest = _enrich_interview_runtime(row.get("interview") if isinstance(row.get("interview"), dict) else None)
+    if latest is None and enriched_interviews:
+        latest = sorted(enriched_interviews, key=lambda x: str(x.get("updated_at") or ""), reverse=True)[0]
+
+    enriched["interview"] = latest
+    enriched["interviews"] = enriched_interviews
+    interview_happened = bool(latest and latest.get("happened")) or any(
+        bool(item.get("happened")) for item in enriched_interviews
+    )
+    enriched["interview_happened"] = interview_happened
+    enriched["delete_allowed"] = not interview_happened
+    return enriched
+
+
+def _build_room_metadata(*, agent: str, instructions: str | None = None) -> str:
+    payload: dict[str, str] = {
+        "agent": agent.strip().lower(),
+        "room_mode": "human_ai",
+    }
+    if instructions:
+        payload["instructions"] = instructions.strip()
+    return json.dumps(payload)
+
+
+async def ensure_room_metadata(*, room: str, agent: str, instructions: str | None = None) -> None:
+    metadata = _build_room_metadata(agent=agent, instructions=instructions)
+    async with api.LiveKitAPI(
+        url=settings.livekit_url,
+        api_key=settings.livekit_api_key,
+        api_secret=settings.livekit_api_secret,
+    ) as lk:
+        rooms = await lk.room.list_rooms(ListRoomsRequest(names=[room]))
+        if not rooms.rooms:
+            await lk.room.create_room(CreateRoomRequest(name=room, metadata=metadata))
+            return
+
+        existing = rooms.rooms[0]
+        if (getattr(existing, "metadata", None) or "") == metadata:
+            return
+        await lk.room.update_room_metadata(UpdateRoomMetadataRequest(room=room, metadata=metadata))
+
+
+def schedule_dispatch_reconcile(*, room: str, agent: str, instructions: str | None) -> None:
+    existing = dispatch_reconcile_tasks.get(room)
+    if existing is not None and not existing.done():
+        return
+
+    async def _runner() -> None:
+        try:
+            for attempt in range(30):
+                try:
+                    result = await ensure_agent_for_room(
+                        room=room,
+                        agent=agent,
+                        instructions=instructions,
+                    )
+                    if result.created_dispatch or result.had_valid_dispatch or result.has_agent:
+                        logging.info(
+                            "dispatch_reconcile_success room=%s agent=%s attempt=%s created=%s had_dispatch=%s has_agent=%s",
+                            room,
+                            agent,
+                            attempt + 1,
+                            result.created_dispatch,
+                            result.had_valid_dispatch,
+                            result.has_agent,
+                        )
+                        return
+                except Exception as exc:  # noqa: BLE001
+                    if attempt in (0, 5, 10, 20, 29):
+                        logging.warning(
+                            "dispatch_reconcile_retry room=%s agent=%s attempt=%s error=%s",
+                            room,
+                            agent,
+                            attempt + 1,
+                            exc,
+                        )
+                await asyncio.sleep(0.5)
+            logging.warning("dispatch_reconcile_giveup room=%s agent=%s", room, agent)
+        finally:
+            dispatch_reconcile_tasks.pop(room, None)
+
+    dispatch_reconcile_tasks[room] = asyncio.create_task(_runner())
+
+
 def create_app() -> FastAPI:
     app = FastAPI(title="LiveKit Meeting API", version="1.0.0")
 
@@ -282,6 +526,22 @@ def create_app() -> FastAPI:
                         prep.removed_dispatches,
                         prep.removed_agents,
                     )
+            elif payload.ai_enabled and not settings.explicit_dispatch:
+                # Fallback mode when AgentDispatchService is unavailable:
+                # store target agent on room metadata so auto-dispatched workers can route correctly.
+                try:
+                    await ensure_room_metadata(
+                        room=room_name,
+                        agent=selected_agent,
+                        instructions=payload.instructions,
+                    )
+                except Exception as room_metadata_exc:  # noqa: BLE001
+                    logging.warning(
+                        "room_metadata_upsert_failed room=%s agent=%s error=%s",
+                        room_name,
+                        selected_agent,
+                        room_metadata_exc,
+                    )
 
             identity = f"{username}-{secrets.token_hex(4)}"
             now = datetime.now(UTC)
@@ -304,16 +564,88 @@ def create_app() -> FastAPI:
                 )
             ).to_jwt()
 
-            should_dispatch_agent = payload.ai_enabled and selected_agent != "observer"
+            should_dispatch_agent = payload.ai_enabled and settings.explicit_dispatch and selected_agent != "observer"
             if should_dispatch_agent:
-                metrics.dispatch_requests += 1
-                result = await ensure_agent_for_room(
-                    room=room_name,
-                    agent=payload.agent,
-                    instructions=payload.instructions,
-                )
-                if result.created_dispatch:
-                    metrics.dispatch_created += 1
+                dispatch_lock = _dispatch_room_lock(room_name)
+                async with dispatch_lock:
+                    metrics.dispatch_requests += 1
+                    dispatch_result = None
+                    dispatch_exc: Exception | None = None
+                    # Serialize per-room dispatch attempts to avoid duplicate agent jobs
+                    # when join submits happen near-simultaneously.
+                    # Fail fast on dispatch health issues to avoid long /api/token latency.
+                    try:
+                        dispatch_result = await asyncio.wait_for(
+                            ensure_agent_for_room(
+                                room=room_name,
+                                agent=payload.agent,
+                                instructions=payload.instructions,
+                            ),
+                            timeout=DISPATCH_SYNC_TIMEOUT_SECONDS,
+                        )
+                        dispatch_exc = None
+                    except Exception as exc:  # noqa: BLE001
+                        dispatch_exc = exc
+
+                    if dispatch_result and dispatch_result.created_dispatch:
+                        metrics.dispatch_created += 1
+                    logging.info(
+                        "dispatch_check room=%s agent=%s room_exists=%s has_humans=%s has_agent=%s had_valid_dispatch=%s created_dispatch=%s",
+                        room_name,
+                        payload.agent,
+                        dispatch_result.room_exists if dispatch_result else False,
+                        dispatch_result.has_humans if dispatch_result else False,
+                        dispatch_result.has_agent if dispatch_result else False,
+                        dispatch_result.had_valid_dispatch if dispatch_result else False,
+                        dispatch_result.created_dispatch if dispatch_result else False,
+                    )
+
+                    if (
+                        not dispatch_result
+                        or (
+                            not dispatch_result.created_dispatch
+                            and not dispatch_result.had_valid_dispatch
+                            and not dispatch_result.has_agent
+                        )
+                    ):
+                        if dispatch_exc:
+                            logging.warning(
+                                "dispatch_unavailable room=%s agent=%s error=%s",
+                                room_name,
+                                payload.agent,
+                                dispatch_exc,
+                            )
+                        logging.warning(
+                            "dispatch_not_confirmed room=%s agent=%s falling_back_to_room_metadata=1",
+                            room_name,
+                            payload.agent,
+                        )
+                        # Fallback when AgentDispatchService is unavailable or no dispatch
+                        # could be confirmed: store target agent on room metadata so implicit
+                        # jobs can route correctly.
+                        try:
+                            await ensure_room_metadata(
+                                room=room_name,
+                                agent=selected_agent,
+                                instructions=payload.instructions,
+                            )
+                            logging.info(
+                                "dispatch_fallback_room_metadata room=%s agent=%s",
+                                room_name,
+                                selected_agent,
+                            )
+                        except Exception as room_metadata_exc:  # noqa: BLE001
+                            logging.warning(
+                                "dispatch_fallback_room_metadata_failed room=%s agent=%s error=%s",
+                                room_name,
+                                selected_agent,
+                                room_metadata_exc,
+                            )
+                        schedule_dispatch_reconcile(
+                            room=room_name,
+                            agent=payload.agent,
+                            instructions=payload.instructions,
+                        )
 
             logging.info(
                 "issued token user=%s identity=%s room=%s ai_enabled=%s dispatch_enabled=%s agent=%s",
@@ -681,6 +1013,195 @@ def create_app() -> FastAPI:
         extracted, used_llm, warnings = extract_candidate_details(merged_text)
         payload = {**extracted, "cvMetadata": cv_metadata}
         return CandidateExtractResponse(**payload, used_llm=used_llm, warnings=warnings)
+
+    @app.get("/api/applications", response_model=list[ApplicationRecord])
+    async def list_all_applications(username: str = Depends(require_session_user)) -> list[ApplicationRecord]:
+        _ = username
+        return [ApplicationRecord(**_enrich_application_runtime(row)) for row in load_applications()]
+
+    @app.get("/api/applications/{application_id}", response_model=ApplicationRecord)
+    async def get_application_by_id(
+        application_id: str,
+        username: str = Depends(require_session_user),
+    ) -> ApplicationRecord:
+        _ = username
+        row = get_application(application_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="application not found")
+        return ApplicationRecord(**_enrich_application_runtime(row))
+
+    @app.post("/api/applications", response_model=ApplicationRecord)
+    async def create_new_application(
+        payload: ApplicationUpsertRequest,
+        username: str = Depends(require_session_user),
+    ) -> ApplicationRecord:
+        body = payload.model_dump()
+        position_id = str(body.get("position_id") or "").strip()
+        candidate_id = str(body.get("candidate_id") or "").strip()
+        if not position_id or not candidate_id:
+            raise HTTPException(status_code=400, detail="position_id and candidate_id are required")
+
+        position = get_position(position_id)
+        if position is None:
+            raise HTTPException(status_code=404, detail="position not found")
+        candidate = get_candidate(candidate_id)
+        if candidate is None:
+            raise HTTPException(status_code=404, detail="candidate not found")
+        if body.get("screening") is None:
+            raise HTTPException(status_code=400, detail="run screening before creating application")
+
+        try:
+            created = create_application(body, created_by=username, position=position, candidate=candidate)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return ApplicationRecord(**_enrich_application_runtime(created))
+
+    @app.put("/api/applications/{application_id}", response_model=ApplicationRecord)
+    async def update_existing_application(
+        application_id: str,
+        payload: ApplicationUpsertRequest,
+        username: str = Depends(require_session_user),
+    ) -> ApplicationRecord:
+        _ = username
+        body = payload.model_dump()
+        position_id = str(body.get("position_id") or "").strip()
+        candidate_id = str(body.get("candidate_id") or "").strip()
+        if not position_id or not candidate_id:
+            raise HTTPException(status_code=400, detail="position_id and candidate_id are required")
+
+        position = get_position(position_id)
+        if position is None:
+            raise HTTPException(status_code=404, detail="position not found")
+        candidate = get_candidate(candidate_id)
+        if candidate is None:
+            raise HTTPException(status_code=404, detail="candidate not found")
+
+        updated = update_application(application_id, body, position=position, candidate=candidate)
+        if updated is None:
+            raise HTTPException(status_code=404, detail="application not found")
+        return ApplicationRecord(**_enrich_application_runtime(updated))
+
+    @app.delete("/api/applications/{application_id}")
+    async def delete_existing_application(
+        application_id: str,
+        username: str = Depends(require_session_user),
+    ) -> dict[str, bool]:
+        _ = username
+        existing = get_application(application_id)
+        if existing is None:
+            raise HTTPException(status_code=404, detail="application not found")
+        if _enrich_application_runtime(existing).get("interview_happened"):
+            raise HTTPException(status_code=409, detail="cannot delete application after interview has happened")
+        deleted = delete_application(application_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="application not found")
+        return {"ok": True}
+
+    @app.post("/api/applications/{application_id}/screen", response_model=ApplicationScreenResponse)
+    async def screen_existing_application(
+        application_id: str,
+        username: str = Depends(require_session_user),
+    ) -> ApplicationScreenResponse:
+        _ = username
+        existing = get_application(application_id)
+        if existing is None:
+            raise HTTPException(status_code=404, detail="application not found")
+
+        position = get_position(existing.get("position_id") or "")
+        if position is None:
+            raise HTTPException(status_code=404, detail="linked position not found")
+        candidate = get_candidate(existing.get("candidate_id") or "")
+        if candidate is None:
+            raise HTTPException(status_code=404, detail="linked candidate not found")
+
+        screening, used_llm, warnings = screen_application(position, candidate)
+        next_payload = {
+            **existing,
+            "screening": screening,
+            "status": existing.get("status") if existing.get("status") == "interview_scheduled" else "screened",
+        }
+        updated = update_application(application_id, next_payload, position=position, candidate=candidate)
+        if updated is None:
+            raise HTTPException(status_code=404, detail="application not found")
+
+        return ApplicationScreenResponse(
+            application=ApplicationRecord(**_enrich_application_runtime(updated)),
+            used_llm=used_llm,
+            warnings=warnings,
+        )
+
+    @app.post("/api/applications/screen-preview", response_model=ApplicationScreenPreviewResponse)
+    async def screen_application_preview(
+        payload: ApplicationScreenPreviewRequest,
+        username: str = Depends(require_session_user),
+    ) -> ApplicationScreenPreviewResponse:
+        _ = username
+        position = get_position(payload.position_id)
+        if position is None:
+            raise HTTPException(status_code=404, detail="position not found")
+        candidate = get_candidate(payload.candidate_id)
+        if candidate is None:
+            raise HTTPException(status_code=404, detail="candidate not found")
+
+        screening, used_llm, warnings = screen_application(position, candidate)
+        return ApplicationScreenPreviewResponse(
+            screening=ApplicationScreening(**screening),
+            used_llm=used_llm,
+            warnings=warnings,
+        )
+
+    @app.post("/api/applications/{application_id}/schedule-interview", response_model=ApplicationRecord)
+    async def schedule_application_interview(
+        application_id: str,
+        payload: ScheduleInterviewRequest,
+        username: str = Depends(require_session_user),
+    ) -> ApplicationRecord:
+        _ = username
+        existing = get_application(application_id)
+        if existing is None:
+            raise HTTPException(status_code=404, detail="application not found")
+
+        position = get_position(existing.get("position_id") or "")
+        if position is None:
+            raise HTTPException(status_code=404, detail="linked position not found")
+        candidate = get_candidate(existing.get("candidate_id") or "")
+        if candidate is None:
+            raise HTTPException(status_code=404, detail="linked candidate not found")
+
+        interview = build_interview(
+            application_id=application_id,
+            position_title=str(position.get("role_title") or ""),
+            candidate_name=str(candidate.get("fullName") or ""),
+            scheduled_for=payload.scheduled_for,
+            stage=payload.stage,
+            agent=payload.agent,
+            notes=payload.notes,
+        )
+        prior_interviews = existing.get("interviews") if isinstance(existing.get("interviews"), list) else []
+        merged_interviews = [
+            item
+            for item in prior_interviews
+            if isinstance(item, dict) and str(item.get("room") or "").strip()
+        ]
+        merged_interviews.append(interview)
+        next_payload = {
+            **existing,
+            "interview": interview,
+            "interviews": merged_interviews,
+            "status": "interview_scheduled",
+        }
+        updated = update_application(application_id, next_payload, position=position, candidate=candidate)
+        if updated is None:
+            raise HTTPException(status_code=404, detail="application not found")
+        return ApplicationRecord(**_enrich_application_runtime(updated))
+
+    @app.get("/api/interviews", response_model=list[ApplicationRecord])
+    async def list_scheduled_interviews(
+        username: str = Depends(require_session_user),
+    ) -> list[ApplicationRecord]:
+        _ = username
+        rows = [row for row in load_applications() if isinstance(row.get("interview"), dict) and row["interview"].get("room")]
+        return [ApplicationRecord(**_enrich_application_runtime(row)) for row in rows]
 
     @app.get("/api/metrics")
     async def get_metrics(

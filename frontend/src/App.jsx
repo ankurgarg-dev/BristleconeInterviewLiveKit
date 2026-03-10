@@ -23,7 +23,9 @@ import { apiClient } from './api';
 import { AgentAudioVisualizerAura } from './components/agents-ui/agent-audio-visualizer-aura';
 import { AgentAudioVisualizerRadial } from './components/agents-ui/agent-audio-visualizer-radial';
 import { AgentAudioVisualizerWave } from './components/agents-ui/agent-audio-visualizer-wave';
+import { ApplicationsPage } from './components/ApplicationsPage';
 import { CandidatesPage } from './components/CandidatesPage';
+import { InterviewsPage } from './components/InterviewsPage';
 import { PositionsPage } from './components/PositionsPage';
 import authBackground from './assets/Background.png';
 import authCam from './assets/Cam.png';
@@ -929,7 +931,6 @@ function MeetingView({ tokenInfo, onLeave, userName }) {
         <div className="meeting-shell">
           <div className="meeting-main">
             {error && <div className="banner error">{error}</div>}
-            {useDirectObserver && directStatus && <div className="banner">{directStatus}</div>}
             {useDirectObserver && directError && <div className="banner error">{directError}</div>}
             {useWaveAgentUi ? (
               <AgentWaveConference
@@ -961,6 +962,7 @@ function JoinCard({ user, onJoin, defaultRoom = 'demo-room' }) {
   const [loading, setLoading] = useState(false);
   const [transcriptAvailable, setTranscriptAvailable] = useState(false);
   const [downloadLoading, setDownloadLoading] = useState(false);
+  const joinInFlightRef = useRef(false);
   const fallbackChoices = useMemo(() => ({ audioEnabled: true, videoEnabled: true }), []);
   const observerSuffix = '-observer';
 
@@ -1007,6 +1009,8 @@ function JoinCard({ user, onJoin, defaultRoom = 'demo-room' }) {
   }, [effectiveRoom]);
 
   async function startMeeting(choices) {
+    if (joinInFlightRef.current) return;
+    joinInFlightRef.current = true;
     const resolvedChoices = choices || pendingChoices || fallbackChoices;
     setLoading(true);
     setError('');
@@ -1037,6 +1041,7 @@ function JoinCard({ user, onJoin, defaultRoom = 'demo-room' }) {
       setError(err.message);
     } finally {
       setLoading(false);
+      joinInFlightRef.current = false;
     }
   }
 
@@ -1159,10 +1164,13 @@ function PlaceholderPage({ title, description }) {
 
 function HomePage({ user, tokenInfo, defaultRoom, onJoin, onLeaveMeeting, onLogout }) {
   const [activeMenu, setActiveMenu] = useState('meeting');
+  const [applicationsPrefill, setApplicationsPrefill] = useState(null);
+  const [applicationFocusId, setApplicationFocusId] = useState(null);
   const menuItems = [
     { key: 'meeting', label: 'Meeting Demo' },
     { key: 'positions', label: 'Positions' },
     { key: 'candidates', label: 'Candidates' },
+    { key: 'applications', label: 'Applications' },
     { key: 'interviews', label: 'Interviews' },
     { key: 'settings', label: 'Settings' },
   ];
@@ -1172,6 +1180,47 @@ function HomePage({ user, tokenInfo, defaultRoom, onJoin, onLeaveMeeting, onLogo
     .slice(0, 2)
     .map((part) => part[0].toUpperCase())
     .join('');
+
+  async function joinInterviewRoom(roomName, selectedAgent = 'interviewer') {
+    const room = String(roomName || '').trim();
+    if (!room) return;
+    const agent = String(selectedAgent || 'interviewer').trim();
+    const token = await apiClient.issueToken({
+      room,
+      display_name: user,
+      ai_enabled: true,
+      agent,
+      instructions: null,
+      capabilities: {
+        can_publish: true,
+        can_subscribe: true,
+        can_publish_data: true,
+        can_publish_sources: ['microphone', 'camera', 'screen_share'],
+      },
+    });
+    onJoin({
+      ...token,
+      selectedAgent: agent,
+      aiEnabled: true,
+      instructions: '',
+      realtimeModel: 'gpt-realtime-mini',
+      audioEnabled: true,
+      videoEnabled: true,
+    });
+    setActiveMenu('meeting');
+  }
+
+  function openApplicationsFromEntity(prefill) {
+    setApplicationsPrefill(prefill || null);
+    setApplicationFocusId(null);
+    setActiveMenu('applications');
+  }
+
+  function openApplicationDetails(applicationId) {
+    setApplicationFocusId(applicationId || null);
+    setApplicationsPrefill(null);
+    setActiveMenu('applications');
+  }
 
   return (
     <div className="portal-shell">
@@ -1205,15 +1254,24 @@ function HomePage({ user, tokenInfo, defaultRoom, onJoin, onLeaveMeeting, onLogo
               <JoinCard user={user} onJoin={onJoin} defaultRoom={defaultRoom} />
             ))}
           {activeMenu === 'positions' && (
-            <PositionsPage />
+            <PositionsPage onCreateApplication={openApplicationsFromEntity} />
           )}
           {activeMenu === 'candidates' && (
-            <CandidatesPage />
+            <CandidatesPage onCreateApplication={openApplicationsFromEntity} />
+          )}
+          {activeMenu === 'applications' && (
+            <ApplicationsPage
+              prefill={applicationsPrefill}
+              selectedApplicationId={applicationFocusId}
+              onPrefillHandled={() => setApplicationsPrefill(null)}
+              onJoinInterview={joinInterviewRoom}
+              onOpenInterviews={() => setActiveMenu('interviews')}
+            />
           )}
           {activeMenu === 'interviews' && (
-            <PlaceholderPage
-              title="Interviews"
-              description="Review upcoming interview loops, schedules, and outcomes."
+            <InterviewsPage
+              onJoinInterview={joinInterviewRoom}
+              onOpenApplication={openApplicationDetails}
             />
           )}
           {activeMenu === 'settings' && (

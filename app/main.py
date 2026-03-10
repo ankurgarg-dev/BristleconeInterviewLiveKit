@@ -12,7 +12,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from dotenv import load_dotenv
-from livekit.agents import AgentServer, JobContext, cli, room_io
+from livekit.agents import AgentServer, JobContext, JobExecutorType, cli, room_io
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -86,8 +86,9 @@ async def rtc_entrypoint(ctx: JobContext) -> None:
     room_metadata = parse_metadata(getattr(ctx.room, "metadata", None))
     job_agent_name = getattr(ctx.job, "agent_name", "") or ""
 
-    # Accept only explicit dispatch jobs for this worker.
-    if settings.explicit_dispatch and job_agent_name != settings.dispatch_agent_name:
+    # In explicit dispatch mode, prefer routed jobs but keep compatibility with
+    # implicit jobs when Agent Dispatch service is unavailable.
+    if settings.explicit_dispatch and job_agent_name and job_agent_name != settings.dispatch_agent_name:
         logger.warning(
             "ignoring dispatch with unexpected job.agent_name=%s expected=%s",
             job_agent_name,
@@ -96,8 +97,13 @@ async def rtc_entrypoint(ctx: JobContext) -> None:
         ctx.shutdown("Ignoring dispatch with unexpected agent_name")
         return
 
-    # Ignore wildcard/system dispatches that do not explicitly declare agent metadata.
-    if settings.explicit_dispatch and "agent" not in dispatch_metadata:
+    # For explicitly routed jobs, require explicit metadata.
+    if (
+        settings.explicit_dispatch
+        and settings.dispatch_agent_name
+        and job_agent_name == settings.dispatch_agent_name
+        and "agent" not in dispatch_metadata
+    ):
         logger.warning("ignoring dispatch without explicit metadata: %s", getattr(ctx.job, "metadata", None))
         ctx.shutdown("Ignoring implicit dispatch without explicit agent metadata")
         return
@@ -125,7 +131,7 @@ async def rtc_entrypoint(ctx: JobContext) -> None:
 
     selected_agent = registry.create(agent_name, metadata=dispatch_metadata)
     if agent_name == "observer":
-        # Presence-only agent mode: no LLM/STT/TTS path in worker.
+        # Keep legacy observer rooms presence-only.
         await ctx.connect()
         try:
             while True:
@@ -173,14 +179,21 @@ async def rtc_entrypoint(ctx: JobContext) -> None:
 
 def build_server() -> AgentServer:
     server = AgentServer(
+        # Process executor mode is creating multiple schedulable worker IDs in
+        # this local setup, and one of them intermittently blackholes jobs.
+        # Thread mode keeps a single healthy scheduling path for demo stability.
+        job_executor_type=JobExecutorType.THREAD,
         ws_url=settings.livekit_url,
         api_key=settings.livekit_api_key,
         api_secret=settings.livekit_api_secret,
+        # Keep worker schedulable on busy local dev laptops where the default
+        # production threshold (0.7) can mark it unavailable continuously.
+        load_threshold=0.99,
     )
-    if settings.explicit_dispatch:
-        server.rtc_session(rtc_entrypoint, agent_name=settings.dispatch_agent_name)
-    else:
-        server.rtc_session(rtc_entrypoint)
+    # In explicit-dispatch mode, register the worker under a named agent so
+    # LiveKit does not also create implicit wildcard jobs for the same room.
+    registered_agent_name = settings.dispatch_agent_name if settings.explicit_dispatch else ""
+    server.rtc_session(rtc_entrypoint, agent_name=registered_agent_name)
     return server
 
 

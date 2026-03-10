@@ -18,8 +18,8 @@ class Settings:
     deepgram_api_key: str = os.getenv("DEEPGRAM_API_KEY", "")
 
     default_agent: str = os.getenv("DEFAULT_AGENT", "assistant")
-    dispatch_agent_name: str = os.getenv("DISPATCH_AGENT_NAME", "router")
-    explicit_dispatch: bool = os.getenv("EXPLICIT_DISPATCH", "true").lower() == "true"
+    dispatch_agent_name: str = (os.getenv("DISPATCH_AGENT_NAME", "router").strip() or "router")
+    explicit_dispatch: bool = os.getenv("EXPLICIT_DISPATCH", "false").lower() == "true"
 
     stt_model: str = os.getenv("DEEPGRAM_STT_MODEL", "nova-3")
     llm_model: str = os.getenv("OPENAI_LLM_MODEL", "gpt-4o-mini")
