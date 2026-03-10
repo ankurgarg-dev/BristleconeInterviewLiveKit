@@ -10,8 +10,10 @@ from shared.prompts import INTERVIEWER_INSTRUCTIONS
 
 class InterviewerAgent(Agent):
     def __init__(self, metadata: dict[str, Any] | None = None) -> None:
+        metadata = metadata or {}
         # TODO: Replace with interview plan, rubric, and evaluation state.
-        super().__init__(instructions=INTERVIEWER_INSTRUCTIONS)
+        instructions = metadata.get("instructions") or INTERVIEWER_INSTRUCTIONS
+        super().__init__(instructions=instructions)
 
 
 class InterviewerAgentFactory(BaseAgentFactory):

@@ -95,7 +95,7 @@ export function InterviewsPage({ onJoinInterview, onOpenApplication }) {
                       <div>{row.interview?.room || '-'}</div>
                       <small>
                         {row.interview?.scheduled_for ? new Date(row.interview.scheduled_for).toLocaleString() : 'Not scheduled'} |{' '}
-                        {row.interview?.agent || '-'}
+                        {row.interview?.agent || '-'} | {row.interview?.duration_minutes || 30} min
                         {Array.isArray(row.interviews) ? ` | Attempts: ${row.interviews.length}` : ''}
                       </small>
                     </td>

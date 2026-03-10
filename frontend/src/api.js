@@ -1,5 +1,32 @@
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080';
 
+function formatApiDetail(detail) {
+  if (typeof detail === 'string' && detail.trim()) return detail;
+  if (Array.isArray(detail)) {
+    const text = detail
+      .map((item) => {
+        if (typeof item === 'string') return item;
+        if (item && typeof item === 'object') {
+          const loc = Array.isArray(item.loc) ? item.loc.join('.') : '';
+          const msg = typeof item.msg === 'string' ? item.msg : JSON.stringify(item);
+          return loc ? `${loc}: ${msg}` : msg;
+        }
+        return String(item ?? '');
+      })
+      .filter(Boolean)
+      .join('; ');
+    if (text) return text;
+  }
+  if (detail && typeof detail === 'object') {
+    try {
+      return JSON.stringify(detail);
+    } catch (_) {
+      return String(detail);
+    }
+  }
+  return '';
+}
+
 async function api(path, options = {}) {
   let response;
   try {
@@ -20,7 +47,8 @@ async function api(path, options = {}) {
 
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
-    throw new Error(body.detail || `request failed: ${response.status}`);
+    const detail = formatApiDetail(body.detail);
+    throw new Error(detail || `request failed: ${response.status}`);
   }
 
   return response.status === 204 ? null : response.json();
@@ -171,4 +199,14 @@ export const apiClient = {
       body: JSON.stringify(payload),
     }),
   listInterviews: () => api('/api/interviews', { method: 'GET' }),
+  listAgentPrompts: () => api('/api/settings/agent-prompts', { method: 'GET' }),
+  updateAgentPrompt: (agent, prompt) =>
+    api(`/api/settings/agent-prompts/${encodeURIComponent(agent)}`, {
+      method: 'PUT',
+      body: JSON.stringify({ prompt }),
+    }),
+  resetAgentPrompt: (agent) =>
+    api(`/api/settings/agent-prompts/${encodeURIComponent(agent)}/reset`, {
+      method: 'POST',
+    }),
 };

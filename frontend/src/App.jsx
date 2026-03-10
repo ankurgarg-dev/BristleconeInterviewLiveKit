@@ -1073,7 +1073,7 @@ function JoinCard({ user, onJoin, defaultRoom = 'demo-room' }) {
         ...tokenInfo,
         selectedAgent: agent,
         aiEnabled,
-        instructions: instructions || '',
+        instructions: tokenInfo.instructions || instructions || '',
         realtimeModel: 'gpt-realtime-mini',
         audioEnabled: resolvedChoices.audioEnabled,
         videoEnabled: resolvedChoices.videoEnabled,
@@ -1203,10 +1203,175 @@ function PlaceholderPage({ title, description }) {
   );
 }
 
+function AgentPromptSettings() {
+  const agentOptions = ['assistant', 'support', 'interviewer', 'realtime', 'observer'];
+  const [records, setRecords] = useState([]);
+  const [selectedAgent, setSelectedAgent] = useState('interviewer');
+  const [draftPrompt, setDraftPrompt] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const [message, setMessage] = useState('');
+
+  const selectedRecord = useMemo(
+    () => records.find((item) => item.agent === selectedAgent) || null,
+    [records, selectedAgent],
+  );
+
+  const loadPrompts = useCallback(async () => {
+    setLoading(true);
+    setError('');
+    setMessage('');
+    try {
+      const response = await apiClient.listAgentPrompts();
+      const nextRecords = response?.prompts || [];
+      setRecords(nextRecords);
+      if (!nextRecords.some((item) => item.agent === selectedAgent) && nextRecords[0]?.agent) {
+        setSelectedAgent(nextRecords[0].agent);
+      }
+    } catch (err) {
+      setError(err.message || 'Failed to load prompts');
+    } finally {
+      setLoading(false);
+    }
+  }, [selectedAgent]);
+
+  useEffect(() => {
+    loadPrompts();
+  }, [loadPrompts]);
+
+  useEffect(() => {
+    setDraftPrompt(selectedRecord?.prompt || '');
+  }, [selectedRecord]);
+
+  async function savePrompt() {
+    if (!selectedAgent) return;
+    setSaving(true);
+    setError('');
+    setMessage('');
+    try {
+      const updated = await apiClient.updateAgentPrompt(selectedAgent, draftPrompt);
+      setRecords((prev) =>
+        prev.map((item) =>
+          item.agent === selectedAgent
+            ? {
+                ...item,
+                prompt: updated.prompt,
+                default_prompt: updated.default_prompt,
+                is_default: updated.is_default,
+              }
+            : item,
+        ),
+      );
+      setMessage(`Saved prompt for ${selectedAgent}.`);
+    } catch (err) {
+      setError(err.message || 'Failed to save prompt');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function restoreDefault() {
+    if (!selectedAgent) return;
+    setSaving(true);
+    setError('');
+    setMessage('');
+    try {
+      const reset = await apiClient.resetAgentPrompt(selectedAgent);
+      setRecords((prev) =>
+        prev.map((item) =>
+          item.agent === selectedAgent
+            ? {
+                ...item,
+                prompt: reset.prompt,
+                default_prompt: reset.default_prompt,
+                is_default: reset.is_default,
+              }
+            : item,
+        ),
+      );
+      setDraftPrompt(reset.prompt);
+      setMessage(`Restored default prompt for ${selectedAgent}.`);
+    } catch (err) {
+      setError(err.message || 'Failed to restore default prompt');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <section className="portal-page">
+      <div className="portal-hero">
+        <h1>Settings</h1>
+        <p>Manage AI agent prompts used during interviews and meetings.</p>
+      </div>
+      <div className="portal-grid settings-grid">
+        <article className="portal-card prompt-settings-card">
+          <h3>Agent Prompt</h3>
+          <p>Select an agent, edit its instruction prompt, and save.</p>
+
+          <label htmlFor="agent-prompt-selector">AI agent</label>
+          <select
+            id="agent-prompt-selector"
+            value={selectedAgent}
+            onChange={(e) => setSelectedAgent(e.target.value)}
+            disabled={loading || saving}
+          >
+            {agentOptions.map((agent) => (
+              <option key={agent} value={agent}>
+                {agent}
+              </option>
+            ))}
+          </select>
+
+          <label htmlFor="agent-prompt-editor">Prompt / instructions</label>
+          <textarea
+            id="agent-prompt-editor"
+            rows={20}
+            value={draftPrompt}
+            onChange={(e) => setDraftPrompt(e.target.value)}
+            disabled={loading || saving}
+          />
+          <div className="settings-meta-row">
+            <small>
+              {selectedRecord
+                ? selectedRecord.is_default
+                  ? 'Using default prompt'
+                  : 'Using custom prompt override'
+                : 'Prompt record unavailable. Click Refresh after backend is reachable.'}
+            </small>
+          </div>
+          <div className="settings-actions">
+            <button type="button" onClick={savePrompt} disabled={loading || saving || !draftPrompt.trim()}>
+              {saving ? 'Saving...' : 'Save prompt'}
+            </button>
+            <button
+              type="button"
+              className="secondary-btn"
+              onClick={restoreDefault}
+              disabled={loading || saving || !selectedRecord || selectedRecord.is_default}
+            >
+              Restore default
+            </button>
+            <button type="button" className="secondary-btn" onClick={loadPrompts} disabled={loading || saving}>
+              Refresh
+            </button>
+          </div>
+          {loading && <p>Loading prompts...</p>}
+          {error && <p className="error">{error}</p>}
+          {message && <p className="success">{message}</p>}
+        </article>
+      </div>
+    </section>
+  );
+}
+
 function HomePage({ user, tokenInfo, defaultRoom, onJoin, onLeaveMeeting, onLogout }) {
   const [activeMenu, setActiveMenu] = useState('meeting');
   const [applicationsPrefill, setApplicationsPrefill] = useState(null);
   const [applicationFocusId, setApplicationFocusId] = useState(null);
+  const [userMenuOpen, setUserMenuOpen] = useState(false);
+  const userMenuRef = useRef(null);
   const menuItems = [
     { key: 'meeting', label: 'Meeting Demo' },
     { key: 'positions', label: 'Positions' },
@@ -1221,6 +1386,20 @@ function HomePage({ user, tokenInfo, defaultRoom, onJoin, onLeaveMeeting, onLogo
     .slice(0, 2)
     .map((part) => part[0].toUpperCase())
     .join('');
+
+  useEffect(() => {
+    function handleDocumentClick(event) {
+      const menuRoot = userMenuRef.current;
+      if (!menuRoot) return;
+      if (!menuRoot.contains(event.target)) {
+        setUserMenuOpen(false);
+      }
+    }
+    document.addEventListener('mousedown', handleDocumentClick);
+    return () => {
+      document.removeEventListener('mousedown', handleDocumentClick);
+    };
+  }, []);
 
   async function joinInterviewRoom(roomName, selectedAgent = 'interviewer') {
     const room = String(roomName || '').trim();
@@ -1243,7 +1422,7 @@ function HomePage({ user, tokenInfo, defaultRoom, onJoin, onLeaveMeeting, onLogo
       ...token,
       selectedAgent: agent,
       aiEnabled: true,
-      instructions: '',
+      instructions: token.instructions || '',
       realtimeModel: 'gpt-realtime-mini',
       audioEnabled: true,
       videoEnabled: true,
@@ -1267,9 +1446,31 @@ function HomePage({ user, tokenInfo, defaultRoom, onJoin, onLeaveMeeting, onLogo
     <div className="portal-shell">
       <header className="portal-topbar">
         <img src={authLogo} alt="Bristlecone" className="portal-logo" />
-        <div className="portal-user">
-          <span className="portal-avatar">{userInitials || 'U'}</span>
-          <span>{user}</span>
+        <div className="portal-user-menu" ref={userMenuRef}>
+          <button
+            type="button"
+            className="portal-user"
+            onClick={() => setUserMenuOpen((open) => !open)}
+            aria-haspopup="menu"
+            aria-expanded={userMenuOpen}
+          >
+            <span className="portal-avatar">{userInitials || 'U'}</span>
+            <span>{user}</span>
+          </button>
+          {userMenuOpen && (
+            <div className="portal-user-dropdown" role="menu">
+              <button
+                type="button"
+                className="portal-user-dropdown-item"
+                onClick={() => {
+                  setUserMenuOpen(false);
+                  onLogout();
+                }}
+              >
+                Logout
+              </button>
+            </div>
+          )}
         </div>
       </header>
 
@@ -1316,19 +1517,7 @@ function HomePage({ user, tokenInfo, defaultRoom, onJoin, onLeaveMeeting, onLogo
             />
           )}
           {activeMenu === 'settings' && (
-            <section className="portal-page">
-              <div className="portal-hero">
-                <h1>Settings</h1>
-                <p>Manage account preferences and workspace defaults.</p>
-              </div>
-              <div className="portal-grid">
-                <article className="portal-card">
-                  <h3>Session</h3>
-                  <p>Sign out of the current session when you are done.</p>
-                  <button onClick={onLogout}>Logout</button>
-                </article>
-              </div>
-            </section>
+            <AgentPromptSettings />
           )}
         </main>
       </div>

@@ -100,6 +100,7 @@ export function ApplicationsPage({
   const [scheduleFor, setScheduleFor] = useState('');
   const [scheduleNotes, setScheduleNotes] = useState('');
   const [interviewAgent, setInterviewAgent] = useState('interviewer');
+  const [interviewDurationMinutes, setInterviewDurationMinutes] = useState(30);
 
   const isEditMode = Boolean(editingId);
 
@@ -198,6 +199,7 @@ export function ApplicationsPage({
     setScheduleFor('');
     setScheduleNotes('');
     setInterviewAgent('interviewer');
+    setInterviewDurationMinutes(30);
     setPositionSearch('');
     setCandidateSearch('');
     setError('');
@@ -217,6 +219,11 @@ export function ApplicationsPage({
       setScheduleFor(isoToLocalInput(fresh.interview?.scheduled_for));
       setScheduleNotes(fresh.interview?.notes || '');
       setInterviewAgent(fresh.interview?.agent || 'interviewer');
+      setInterviewDurationMinutes(
+        Number.isFinite(Number(fresh.interview?.duration_minutes))
+          ? Math.max(1, Math.min(90, Number(fresh.interview?.duration_minutes)))
+          : 30,
+      );
     } catch (err) {
       setError(err.message);
     } finally {
@@ -345,6 +352,7 @@ export function ApplicationsPage({
         scheduled_for: localInputToIso(scheduleFor),
         stage: null,
         agent: interviewAgent,
+        duration_minutes: Math.max(1, Math.min(90, Number(interviewDurationMinutes) || 30)),
         notes: scheduleNotes,
       });
       setForm(fromApplication(updated));
@@ -576,6 +584,16 @@ export function ApplicationsPage({
               <option value="observer">observer</option>
             </select>
 
+            <label htmlFor="application-duration-minutes">Duration (minutes)</label>
+            <input
+              id="application-duration-minutes"
+              type="number"
+              min={1}
+              max={90}
+              value={interviewDurationMinutes}
+              onChange={(event) => setInterviewDurationMinutes(event.target.value)}
+            />
+
             <label htmlFor="application-interview-notes">Interview Notes</label>
             <textarea
               id="application-interview-notes"
@@ -600,7 +618,8 @@ export function ApplicationsPage({
                 </p>
                 <p className="positions-meta">
                   Agent: <strong>{form.interview.agent || interviewAgent}</strong> | Scheduled:{' '}
-                  {form.interview.scheduled_for ? new Date(form.interview.scheduled_for).toLocaleString() : 'Not set'}
+                  {form.interview.scheduled_for ? new Date(form.interview.scheduled_for).toLocaleString() : 'Not set'} |
+                  Duration: <strong>{form.interview.duration_minutes || 30} min</strong>
                 </p>
                 <p className="positions-meta">
                   Transcript: <strong>{form.interview.transcript_available ? 'Available' : 'Not available yet'}</strong>

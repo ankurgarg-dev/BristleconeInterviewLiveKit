@@ -61,6 +61,7 @@ from app.applications_service import (
     screen_application,
     update_application,
 )
+from app.agent_prompts_service import get_effective_prompt, list_prompt_records, reset_prompt, set_prompt
 from shared.config import settings
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -86,6 +87,8 @@ dispatch_reconcile_tasks: dict[str, asyncio.Task[None]] = {}
 dispatch_room_locks: dict[str, asyncio.Lock] = {}
 # Keep token issuance snappy even when AgentDispatchService is unhealthy.
 DISPATCH_SYNC_TIMEOUT_SECONDS = 0.8
+INTERVIEW_CONTEXT_MARKERS = ("$${INTERVIEW-CONTEXT}$$", "$${INTERVIEW_CONTEXT}$$")
+INTERVIEW_CONTEXT_TEXT_CAP = 1500
 
 
 def _dispatch_room_lock(room: str) -> asyncio.Lock:
@@ -95,6 +98,175 @@ def _dispatch_room_lock(room: str) -> asyncio.Lock:
         lock = asyncio.Lock()
         dispatch_room_locks[room_key] = lock
     return lock
+
+
+def _as_text(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _as_list_text(value: Any) -> str:
+    if isinstance(value, list):
+        parts = [_as_text(item) for item in value]
+        parts = [part for part in parts if part]
+        return ", ".join(parts)
+    return _as_text(value)
+
+
+def _pick_nonempty(*values: Any) -> str:
+    for value in values:
+        text = _as_text(value)
+        if text:
+            return text
+    return ""
+
+
+def _default_if_empty(value: str, default: str = "Not available") -> str:
+    text = _as_text(value)
+    return text or default
+
+
+def _truncate_context_text(value: str, max_chars: int = INTERVIEW_CONTEXT_TEXT_CAP) -> str:
+    text = _as_text(value)
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars].rstrip() + "... [truncated]"
+
+
+def _build_jd_summary(position: dict[str, Any], screening: dict[str, Any], application: dict[str, Any]) -> str:
+    role = _pick_nonempty(position.get("role_title"), application.get("position_snapshot", {}).get("role_title"))
+    level = _pick_nonempty(position.get("level"), application.get("position_snapshot", {}).get("level"))
+    focus = _as_list_text(position.get("focus_areas"))
+    tech = _as_list_text(position.get("tech_stack"))
+    llm_summary = _pick_nonempty(
+        screening.get("job_requirements_summary", {}).get("summary"),
+        screening.get("justification"),
+    )
+    if llm_summary:
+        return llm_summary
+    parts = [part for part in [role, level, focus, tech] if _as_text(part)]
+    return " | ".join(parts)
+
+
+def _find_application_by_interview_room(room: str) -> dict[str, Any] | None:
+    target = _as_text(room)
+    if not target:
+        return None
+    for row in load_applications():
+        if not isinstance(row, dict):
+            continue
+        current = row.get("interview")
+        if isinstance(current, dict) and _as_text(current.get("room")) == target:
+            return row
+        attempts = row.get("interviews")
+        if isinstance(attempts, list):
+            for item in attempts:
+                if isinstance(item, dict) and _as_text(item.get("room")) == target:
+                    return row
+    return None
+
+
+def _interview_entry_for_room(application: dict[str, Any], room: str) -> dict[str, Any]:
+    target = _as_text(room)
+    current = application.get("interview")
+    if isinstance(current, dict) and _as_text(current.get("room")) == target:
+        return current
+    attempts = application.get("interviews")
+    if isinstance(attempts, list):
+        for item in attempts:
+            if isinstance(item, dict) and _as_text(item.get("room")) == target:
+                return item
+    return current if isinstance(current, dict) else {}
+
+
+def _build_interview_context_block(*, room: str) -> str | None:
+    application = _find_application_by_interview_room(room)
+    if not application:
+        return None
+
+    interview = _interview_entry_for_room(application, room)
+    position = get_position(_as_text(application.get("position_id"))) or {}
+    candidate = get_candidate(_as_text(application.get("candidate_id"))) or {}
+    screening = application.get("screening") if isinstance(application.get("screening"), dict) else {}
+
+    jd_text = _pick_nonempty(position.get("jd_text"))
+    jd_summary = _build_jd_summary(position, screening, application)
+    platform = _as_list_text(position.get("tech_stack"))
+    must_have = _pick_nonempty(
+        _as_list_text(position.get("must_haves")),
+        _as_list_text(application.get("position_snapshot", {}).get("must_haves")),
+    )
+    nice_to_have = _as_list_text(position.get("nice_to_haves"))
+    cv_text = _pick_nonempty(
+        candidate.get("cvTextSummary"),
+        candidate.get("candidateContext"),
+        _as_list_text(candidate.get("keyProjectHighlights")),
+    )
+    duration = interview.get("duration_minutes") if isinstance(interview, dict) else None
+    duration_text = f"{int(duration)} minutes" if isinstance(duration, (int, float)) else "30 minutes"
+
+    return (
+        "--------------------------------------------------\n"
+        "INTERVIEW INPUT CONTEXT\n"
+        "--------------------------------------------------\n\n"
+        f"Job Description:\n{_default_if_empty(_truncate_context_text(jd_text))}\n\n"
+        f"JD Summary:\n{_default_if_empty(jd_summary)}\n\n"
+        f"Technology Platform:\n{_default_if_empty(platform)}\n\n"
+        f"Must Have Skills:\n{_default_if_empty(must_have)}\n\n"
+        f"Nice To Have Skills:\n{_default_if_empty(nice_to_have)}\n\n"
+        f"Candidate CV:\n{_default_if_empty(_truncate_context_text(cv_text))}\n\n"
+        f"Total Interview Duration:\n{duration_text}"
+    )
+
+
+def _expand_interview_context_placeholders(prompt: str, room: str) -> str:
+    text = _as_text(prompt)
+    if not text:
+        return text
+    marker_present = any(marker in text for marker in INTERVIEW_CONTEXT_MARKERS)
+    if not marker_present:
+        return text
+    context_block = _build_interview_context_block(room=room)
+    if not context_block:
+        return text
+    for marker in INTERVIEW_CONTEXT_MARKERS:
+        text = text.replace(marker, context_block)
+    return text
+
+
+def _inject_prompt_trace_at_transcript_start(*, room: str, prompt: str, username: str) -> None:
+    room_name = _as_text(room)
+    prompt_text = _as_text(prompt)
+    if not room_name or not prompt_text:
+        return
+
+    path = _transcript_file_path(room_name)
+    line = {
+        "timestamp": datetime.now(UTC).isoformat(),
+        "room": room_name,
+        "speaker": "System",
+        "source": "system-prompt",
+        "text": f"Resolved AI prompt for session:\n{prompt_text}",
+        "username": username,
+    }
+
+    with transcript_lock:
+        existing = ""
+        if path.exists():
+            existing = path.read_text(encoding="utf-8")
+            for raw in existing.splitlines():
+                raw = raw.strip()
+                if not raw:
+                    continue
+                try:
+                    row = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                if str(row.get("source") or "").strip() == "system-prompt":
+                    return
+
+        path.parent.mkdir(parents=True, exist_ok=True)
+        prefix = json.dumps(line, ensure_ascii=False) + "\n"
+        path.write_text(prefix + existing, encoding="utf-8")
 
 
 class LoginRequest(BaseModel):
@@ -132,6 +304,22 @@ class TokenResponse(BaseModel):
     identity: str
     room: str
     expires_at: str
+    instructions: str = ""
+
+
+class AgentPromptRecord(BaseModel):
+    agent: str
+    prompt: str
+    default_prompt: str
+    is_default: bool
+
+
+class AgentPromptListResponse(BaseModel):
+    prompts: list[AgentPromptRecord]
+
+
+class AgentPromptUpdateRequest(BaseModel):
+    prompt: str = Field(min_length=1, max_length=12000)
 
 
 class ClientEventRequest(BaseModel):
@@ -142,7 +330,7 @@ class ClientEventRequest(BaseModel):
 class OpenAIRealtimeTokenRequest(BaseModel):
     model: str | None = None
     voice: str | None = None
-    instructions: str | None = Field(default=None, max_length=2000)
+    instructions: str | None = Field(default=None, max_length=12000)
 
 
 class OpenAIRealtimeTokenResponse(BaseModel):
@@ -254,6 +442,7 @@ class ApplicationInterview(BaseModel):
     stage: str = "technical_screen"
     status: str = "scheduled"
     agent: str = "interviewer"
+    duration_minutes: int = 30
     notes: str = ""
     updated_at: str = ""
     happened: bool = False
@@ -322,6 +511,7 @@ class ScheduleInterviewRequest(BaseModel):
     scheduled_for: str | None = None
     stage: str | None = None
     agent: str = "interviewer"
+    duration_minutes: int = Field(default=30, ge=1, le=90)
     notes: str = ""
 
 
@@ -489,12 +679,43 @@ def create_app() -> FastAPI:
     async def me(username: str = Depends(require_session_user)) -> MeResponse:
         return MeResponse(username=username)
 
+    @app.get("/api/settings/agent-prompts", response_model=AgentPromptListResponse)
+    async def list_agent_prompts(username: str = Depends(require_session_user)) -> AgentPromptListResponse:
+        del username
+        records = [AgentPromptRecord(**item) for item in list_prompt_records()]
+        return AgentPromptListResponse(prompts=records)
+
+    @app.put("/api/settings/agent-prompts/{agent}", response_model=AgentPromptRecord)
+    async def upsert_agent_prompt(
+        agent: str,
+        payload: AgentPromptUpdateRequest,
+        username: str = Depends(require_session_user),
+    ) -> AgentPromptRecord:
+        del username
+        try:
+            updated = set_prompt(agent, payload.prompt)
+            return AgentPromptRecord(**updated)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/settings/agent-prompts/{agent}/reset", response_model=AgentPromptRecord)
+    async def reset_agent_prompt(agent: str, username: str = Depends(require_session_user)) -> AgentPromptRecord:
+        del username
+        try:
+            reset = reset_prompt(agent)
+            return AgentPromptRecord(**reset)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     @app.post("/api/token", response_model=TokenResponse)
     async def create_token(payload: TokenRequest, username: str = Depends(require_session_user)) -> TokenResponse:
         metrics.token_requests += 1
 
         try:
             selected_agent = payload.agent.strip().lower()
+            resolved_instructions = (payload.instructions or "").strip()
+            if payload.ai_enabled and not resolved_instructions:
+                resolved_instructions = get_effective_prompt(selected_agent)
             requested_room = payload.room.strip()
             if not requested_room:
                 raise HTTPException(status_code=400, detail="room is required")
@@ -503,6 +724,7 @@ def create_app() -> FastAPI:
             observer_suffix = "-observer"
             if selected_agent == "observer" and not room_name.endswith(observer_suffix):
                 room_name = f"{room_name}{observer_suffix}"
+            resolved_instructions = _expand_interview_context_placeholders(resolved_instructions, room_name)
 
             # Enforce room-mode isolation at server boundary even if client is stale.
             if selected_agent != "observer" and room_name.endswith(observer_suffix):
@@ -533,7 +755,7 @@ def create_app() -> FastAPI:
                     await ensure_room_metadata(
                         room=room_name,
                         agent=selected_agent,
-                        instructions=payload.instructions,
+                        instructions=resolved_instructions or None,
                     )
                 except Exception as room_metadata_exc:  # noqa: BLE001
                     logging.warning(
@@ -579,7 +801,7 @@ def create_app() -> FastAPI:
                             ensure_agent_for_room(
                                 room=room_name,
                                 agent=payload.agent,
-                                instructions=payload.instructions,
+                                instructions=resolved_instructions or None,
                             ),
                             timeout=DISPATCH_SYNC_TIMEOUT_SECONDS,
                         )
@@ -627,7 +849,7 @@ def create_app() -> FastAPI:
                             await ensure_room_metadata(
                                 room=room_name,
                                 agent=selected_agent,
-                                instructions=payload.instructions,
+                                instructions=resolved_instructions or None,
                             )
                             logging.info(
                                 "dispatch_fallback_room_metadata room=%s agent=%s",
@@ -644,7 +866,7 @@ def create_app() -> FastAPI:
                         schedule_dispatch_reconcile(
                             room=room_name,
                             agent=payload.agent,
-                            instructions=payload.instructions,
+                            instructions=resolved_instructions or None,
                         )
 
             logging.info(
@@ -656,6 +878,15 @@ def create_app() -> FastAPI:
                 should_dispatch_agent,
                 payload.agent,
             )
+            if payload.ai_enabled and resolved_instructions:
+                try:
+                    _inject_prompt_trace_at_transcript_start(
+                        room=room_name,
+                        prompt=resolved_instructions,
+                        username=username,
+                    )
+                except Exception:  # noqa: BLE001
+                    logging.exception("prompt trace injection failed room=%s user=%s", room_name, username)
 
             return TokenResponse(
                 token=token,
@@ -663,6 +894,7 @@ def create_app() -> FastAPI:
                 identity=identity,
                 room=room_name,
                 expires_at=expires_at.isoformat(),
+                instructions=resolved_instructions,
             )
         except HTTPException:
             metrics.token_failures += 1
@@ -1175,6 +1407,7 @@ def create_app() -> FastAPI:
             scheduled_for=payload.scheduled_for,
             stage=payload.stage,
             agent=payload.agent,
+            duration_minutes=payload.duration_minutes,
             notes=payload.notes,
         )
         prior_interviews = existing.get("interviews") if isinstance(existing.get("interviews"), list) else []

@@ -31,6 +31,8 @@ APPLICATION_STATUSES = {
 }
 
 INTERVIEW_AGENTS = {"assistant", "support", "interviewer", "realtime", "observer"}
+DEFAULT_INTERVIEW_DURATION_MINUTES = 30
+MAX_INTERVIEW_DURATION_MINUTES = 90
 
 
 def _applications_file_path() -> Path:
@@ -320,6 +322,7 @@ def _normalize_interview(raw: Any) -> dict[str, Any] | None:
         "stage": str(raw.get("stage") or "technical_screen").strip() or "technical_screen",
         "status": str(raw.get("status") or "scheduled").strip() or "scheduled",
         "agent": _normalize_interview_agent(raw.get("agent")),
+        "duration_minutes": _normalize_interview_duration_minutes(raw.get("duration_minutes")),
         "notes": str(raw.get("notes") or "").strip(),
         "updated_at": str(raw.get("updated_at") or _now_iso()),
     }
@@ -343,6 +346,19 @@ def _normalize_interview_agent(value: Any) -> str:
     if agent in INTERVIEW_AGENTS:
         return agent
     return "interviewer"
+
+
+def _normalize_interview_duration_minutes(value: Any) -> int:
+    try:
+        minutes = int(value)
+    except (TypeError, ValueError):
+        return DEFAULT_INTERVIEW_DURATION_MINUTES
+
+    if minutes < 1:
+        return DEFAULT_INTERVIEW_DURATION_MINUTES
+    if minutes > MAX_INTERVIEW_DURATION_MINUTES:
+        return MAX_INTERVIEW_DURATION_MINUTES
+    return minutes
 
 
 def _position_snapshot(position: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -917,6 +933,7 @@ def build_interview(
     scheduled_for: str | None,
     stage: str | None,
     agent: str | None,
+    duration_minutes: int | None,
     notes: str | None = None,
 ) -> dict[str, Any]:
     role_slug = _slug(position_title, "role")
@@ -934,6 +951,7 @@ def build_interview(
         "stage": str(stage or "technical_screen").strip() or "technical_screen",
         "status": "scheduled",
         "agent": normalized_agent,
+        "duration_minutes": _normalize_interview_duration_minutes(duration_minutes),
         "notes": str(notes or "").strip(),
         "updated_at": _now_iso(),
     }

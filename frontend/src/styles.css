@@ -53,6 +53,10 @@ button:disabled {
   color: #b00020;
 }
 
+.success {
+  color: #1a7d45;
+}
+
 .auth-card,
 .join-page {
   max-width: 1100px;
@@ -466,6 +470,49 @@ button:disabled {
   gap: 0.65rem;
   color: #16333d;
   font-weight: 600;
+  width: auto;
+  border: 1px solid transparent;
+  background: transparent;
+  padding: 0.28rem 0.45rem;
+}
+
+.portal-user-menu {
+  position: relative;
+}
+
+.portal-user:hover,
+.portal-user:focus-visible {
+  background: #eef6f9;
+  border-color: #ccdde3;
+}
+
+.portal-user-dropdown {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 0.35rem);
+  min-width: 148px;
+  background: #fff;
+  border: 1px solid #d6e3e8;
+  border-radius: 0.6rem;
+  box-shadow: 0 10px 22px rgba(16, 32, 39, 0.12);
+  padding: 0.35rem;
+  z-index: 10;
+}
+
+.portal-user-dropdown-item {
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  color: #173640;
+  border: 1px solid transparent;
+  border-radius: 0.45rem;
+  padding: 0.5rem 0.55rem;
+}
+
+.portal-user-dropdown-item:hover,
+.portal-user-dropdown-item:focus-visible {
+  background: #eef7fb;
+  border-color: #c7e1eb;
 }
 
 .portal-avatar {
@@ -568,6 +615,41 @@ button:disabled {
 .portal-card p {
   margin: 0;
   color: #4e6973;
+}
+
+.settings-grid {
+  grid-template-columns: minmax(360px, 1fr);
+}
+
+.prompt-settings-card {
+  display: grid;
+  gap: 0.65rem;
+  align-content: start;
+}
+
+.settings-actions {
+  display: flex;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.settings-actions button {
+  width: auto;
+  min-width: 130px;
+}
+
+.settings-meta-row {
+  min-height: 1.1rem;
+}
+
+.settings-meta-row small {
+  color: #3f5d67;
+}
+
+.secondary-btn {
+  background: #eef5f7;
+  border: 1px solid #bfd2d8;
+  color: #1f4d5a;
 }
 
 .positions-page {

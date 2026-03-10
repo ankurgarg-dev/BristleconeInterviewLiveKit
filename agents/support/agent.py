@@ -10,8 +10,10 @@ from shared.prompts import SUPPORT_INSTRUCTIONS
 
 class SupportAgent(Agent):
     def __init__(self, metadata: dict[str, Any] | None = None) -> None:
+        metadata = metadata or {}
         # TODO: Replace with support-specific tools/workflows.
-        super().__init__(instructions=SUPPORT_INSTRUCTIONS)
+        instructions = metadata.get("instructions") or SUPPORT_INSTRUCTIONS
+        super().__init__(instructions=instructions)
 
 
 class SupportAgentFactory(BaseAgentFactory):
