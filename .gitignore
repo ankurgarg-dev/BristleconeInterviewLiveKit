@@ -24,7 +24,14 @@ frontend/dist/
 
 # Logs
 *.log
+logs/
 
 # Coverage
 .coverage
 htmlcov/
+
+# Runtime data (generated at local run-time)
+data/transcripts/
+data/recordings/
+data/cvs/
+data/*.json

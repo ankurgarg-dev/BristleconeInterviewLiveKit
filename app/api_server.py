@@ -10,6 +10,7 @@ import sys
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -24,6 +25,15 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from livekit import api
 from livekit.api import AccessToken, VideoGrants
+from livekit.protocol.egress import (
+    EgressInfo,
+    EgressStatus,
+    EncodedFileOutput,
+    EncodedFileType,
+    ListEgressRequest,
+    RoomCompositeEgressRequest,
+    StopEgressRequest,
+)
 from livekit.protocol.room import CreateRoomRequest, ListRoomsRequest, UpdateRoomMetadataRequest
 from pydantic import BaseModel, Field
 import certifi
@@ -85,6 +95,7 @@ transcript_lock = threading.Lock()
 transcript_seen_keys: dict[str, set[str]] = {}
 dispatch_reconcile_tasks: dict[str, asyncio.Task[None]] = {}
 dispatch_room_locks: dict[str, asyncio.Lock] = {}
+recording_finalize_tasks: dict[str, asyncio.Task[None]] = {}
 # Keep token issuance snappy even when AgentDispatchService is unhealthy.
 DISPATCH_SYNC_TIMEOUT_SECONDS = 0.8
 INTERVIEW_CONTEXT_MARKERS = ("$${INTERVIEW-CONTEXT}$$", "$${INTERVIEW_CONTEXT}$$")
@@ -448,6 +459,10 @@ class ApplicationInterview(BaseModel):
     happened: bool = False
     transcript_available: bool = False
     transcript_line_count: int = 0
+    recording_available: bool = False
+    recording_size_bytes: int = 0
+    recording_filename: str = ""
+    recording_updated_at: str | None = None
 
 
 class ApplicationPositionSnapshot(BaseModel):
@@ -515,6 +530,21 @@ class ScheduleInterviewRequest(BaseModel):
     notes: str = ""
 
 
+class RecordingControlRequest(BaseModel):
+    room: str
+
+
+class RecordingStatusResponse(BaseModel):
+    room: str
+    is_recording: bool
+    egress_id: str = ""
+    egress_status: str = ""
+    recording_available: bool = False
+    recording_filename: str = ""
+    recording_size_bytes: int = 0
+    recording_updated_at: str | None = None
+
+
 def _transcript_line_count_for_room(room: str) -> int:
     normalized_room = str(room or "").strip()
     if not normalized_room:
@@ -530,6 +560,264 @@ def _transcript_line_count_for_room(room: str) -> int:
     return count
 
 
+def _recordings_dir() -> Path:
+    return Path(__file__).resolve().parents[1] / "data" / "recordings"
+
+
+def _is_egress_live(status: int) -> bool:
+    return status in (
+        EgressStatus.EGRESS_STARTING,
+        EgressStatus.EGRESS_ACTIVE,
+        EgressStatus.EGRESS_ENDING,
+    )
+
+
+def _is_egress_terminal(status: int) -> bool:
+    return status in (
+        EgressStatus.EGRESS_COMPLETE,
+        EgressStatus.EGRESS_FAILED,
+        EgressStatus.EGRESS_ABORTED,
+        EgressStatus.EGRESS_LIMIT_REACHED,
+    )
+
+
+def _egress_status_name(status: int) -> str:
+    try:
+        return EgressStatus.Name(status)
+    except Exception:  # noqa: BLE001
+        return str(status)
+
+
+def _egress_sort_key(info: EgressInfo) -> int:
+    return int(getattr(info, "updated_at", 0) or getattr(info, "ended_at", 0) or getattr(info, "started_at", 0) or 0)
+
+
+def _to_utc_datetime_from_epoch(value: int) -> datetime:
+    raw = int(value or 0)
+    if raw <= 0:
+        return datetime.now(UTC)
+    # Egress fields can be seconds, milliseconds, microseconds, or nanoseconds.
+    if raw >= 1_000_000_000_000_000_000:
+        return datetime.fromtimestamp(raw / 1_000_000_000, tz=UTC)
+    if raw >= 1_000_000_000_000_000:
+        return datetime.fromtimestamp(raw / 1_000_000, tz=UTC)
+    if raw >= 1_000_000_000_000:
+        return datetime.fromtimestamp(raw / 1_000, tz=UTC)
+    return datetime.fromtimestamp(raw, tz=UTC)
+
+
+def _recording_filename_for_egress(room: str, info: EgressInfo, ext: str) -> str:
+    safe_room = _safe_filename_component(room)
+    safe_egress_id = _safe_filename_component(getattr(info, "egress_id", "") or "egress")
+    started_at_ms = int(getattr(info, "started_at", 0) or 0)
+    stamp = _to_utc_datetime_from_epoch(started_at_ms).strftime("%Y%m%d%H%M%S")
+    suffix = ext if ext.startswith(".") else f".{ext}"
+    return f"{safe_room}__{stamp}__{safe_egress_id}{suffix}"
+
+
+def _recording_extension_from_egress(info: EgressInfo) -> str:
+    allowed = {".mp4", ".webm", ".ogg", ".mp3", ".m4a", ".wav"}
+    for row in getattr(info, "file_results", []) or []:
+        filename = str(getattr(row, "filename", "") or "").strip()
+        if filename:
+            suffix = Path(filename).suffix.lower()
+            if suffix in allowed:
+                return suffix
+        location = str(getattr(row, "location", "") or "").strip()
+        if location:
+            parsed = urllib.parse.urlparse(location)
+            suffix = Path(parsed.path or "").suffix.lower()
+            if suffix in allowed:
+                return suffix
+    return ".mp4"
+
+
+def _existing_recording_for_egress(room: str, egress_id: str) -> Path | None:
+    safe_room = _safe_filename_component(room)
+    safe_egress_id = _safe_filename_component(egress_id)
+    matches = sorted(
+        _recordings_dir().glob(f"{safe_room}__*__{safe_egress_id}.*"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    return matches[0] if matches else None
+
+
+def _local_source_paths_from_egress_file(file_result: Any) -> list[Path]:
+    candidates: list[Path] = []
+    filename = str(getattr(file_result, "filename", "") or "").strip()
+    if filename:
+        candidates.append(Path(filename))
+    location = str(getattr(file_result, "location", "") or "").strip()
+    if location:
+        parsed = urllib.parse.urlparse(location)
+        if parsed.scheme in ("", "file"):
+            path_text = parsed.path if parsed.scheme == "file" else location
+            if path_text:
+                candidates.append(Path(path_text))
+    return candidates
+
+
+def _download_egress_recording_from_url(*, location: str, target: Path) -> bool:
+    if not location:
+        return False
+    parsed = urllib.parse.urlparse(location)
+    if parsed.scheme not in ("http", "https"):
+        return False
+    try:
+        ssl_ctx = ssl.create_default_context(cafile=certifi.where())
+        with urllib.request.urlopen(location, timeout=60, context=ssl_ctx) as resp:
+            payload = resp.read()
+        if not payload:
+            return False
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(payload)
+        return True
+    except Exception:  # noqa: BLE001
+        logging.exception("recording_url_download_failed location=%s target=%s", location, target)
+        return False
+
+
+def _capture_egress_recording(room: str, info: EgressInfo) -> Path | None:
+    egress_id = str(getattr(info, "egress_id", "") or "").strip()
+    if not egress_id:
+        return None
+    existing = _existing_recording_for_egress(room, egress_id)
+    if existing is not None and existing.exists():
+        return existing
+
+    file_results = list(getattr(info, "file_results", []) or [])
+    if not file_results:
+        return None
+
+    ext = _recording_extension_from_egress(info)
+    destination = _recordings_dir() / _recording_filename_for_egress(room, info, ext)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+
+    for result in file_results:
+        for source_path in _local_source_paths_from_egress_file(result):
+            try:
+                if source_path.exists() and source_path.is_file():
+                    if source_path.resolve() == destination.resolve():
+                        return destination
+                    destination.write_bytes(source_path.read_bytes())
+                    return destination
+            except Exception:  # noqa: BLE001
+                logging.exception(
+                    "recording_local_copy_failed source=%s destination=%s egress_id=%s",
+                    source_path,
+                    destination,
+                    egress_id,
+                )
+        location = str(getattr(result, "location", "") or "").strip()
+        if _download_egress_recording_from_url(location=location, target=destination):
+            return destination
+    return None
+
+
+async def _list_room_egress(room: str, *, active: bool | None = None) -> list[EgressInfo]:
+    req = ListEgressRequest(room_name=room)
+    if active is not None:
+        req.active = active
+    async with api.LiveKitAPI(
+        url=settings.livekit_url,
+        api_key=settings.livekit_api_key,
+        api_secret=settings.livekit_api_secret,
+    ) as lk:
+        response = await lk.egress.list_egress(req)
+    return list(response.items or [])
+
+
+def _friendly_egress_error(exc: Exception) -> str:
+    raw = str(exc or "").strip()
+    lowered = raw.lower()
+    if "egress not connected" in lowered or "redis required" in lowered:
+        return "LiveKit egress is not configured on the server. Enable Redis and the egress service in LiveKit to use recording."
+    if "requested room does not exist" in lowered:
+        return "Room is not active yet. Join the meeting first, then start recording."
+    if raw:
+        return raw
+    return "unknown egress error"
+
+
+def _latest_live_egress(infos: list[EgressInfo]) -> EgressInfo | None:
+    live = [item for item in infos if _is_egress_live(int(getattr(item, "status", 0) or 0))]
+    if not live:
+        return None
+    return sorted(live, key=_egress_sort_key, reverse=True)[0]
+
+
+def _latest_terminal_egress(infos: list[EgressInfo]) -> EgressInfo | None:
+    done = [item for item in infos if _is_egress_terminal(int(getattr(item, "status", 0) or 0))]
+    if not done:
+        return None
+    return sorted(done, key=_egress_sort_key, reverse=True)[0]
+
+
+def _recording_status_response(*, room: str, live: EgressInfo | None) -> RecordingStatusResponse:
+    runtime = _recording_runtime_for_room(room)
+    return RecordingStatusResponse(
+        room=room,
+        is_recording=live is not None,
+        egress_id=str(getattr(live, "egress_id", "") or "") if live else "",
+        egress_status=_egress_status_name(int(getattr(live, "status", 0) or 0)) if live else "",
+        recording_available=bool(runtime.get("recording_available")),
+        recording_filename=str(runtime.get("recording_filename") or ""),
+        recording_size_bytes=int(runtime.get("recording_size_bytes") or 0),
+        recording_updated_at=runtime.get("recording_updated_at"),
+    )
+
+
+async def _finalize_egress_recording(room: str, egress_id: str) -> None:
+    task_key = f"{room}:{egress_id}"
+    try:
+        for _ in range(45):
+            infos = await _list_room_egress(room)
+            target = next((item for item in infos if str(getattr(item, "egress_id", "")) == egress_id), None)
+            if target is None:
+                await asyncio.sleep(1.0)
+                continue
+            status = int(getattr(target, "status", 0) or 0)
+            if _is_egress_terminal(status):
+                _capture_egress_recording(room, target)
+                return
+            await asyncio.sleep(1.0)
+    except Exception:  # noqa: BLE001
+        logging.exception("recording_finalize_failed room=%s egress_id=%s", room, egress_id)
+    finally:
+        recording_finalize_tasks.pop(task_key, None)
+
+
+def _latest_recording_path(room: str) -> Path | None:
+    normalized_room = str(room or "").strip()
+    if not normalized_room:
+        return None
+    directory = _recordings_dir()
+    if not directory.exists():
+        return None
+    safe_room = _safe_filename_component(normalized_room)
+    matches = sorted(directory.glob(f"{safe_room}__*"), key=lambda path: path.stat().st_mtime, reverse=True)
+    return matches[0] if matches else None
+
+
+def _recording_runtime_for_room(room: str) -> dict[str, Any]:
+    path = _latest_recording_path(room)
+    if path is None or not path.exists():
+        return {
+            "recording_available": False,
+            "recording_size_bytes": 0,
+            "recording_filename": "",
+            "recording_updated_at": None,
+        }
+    stat = path.stat()
+    return {
+        "recording_available": True,
+        "recording_size_bytes": int(stat.st_size),
+        "recording_filename": path.name,
+        "recording_updated_at": datetime.fromtimestamp(stat.st_mtime, tz=UTC).isoformat(),
+    }
+
+
 def _enrich_interview_runtime(interview: dict[str, Any] | None) -> dict[str, Any] | None:
     if not isinstance(interview, dict):
         return None
@@ -541,6 +829,7 @@ def _enrich_interview_runtime(interview: dict[str, Any] | None) -> dict[str, Any
     enriched["transcript_line_count"] = line_count
     enriched["transcript_available"] = line_count > 0
     enriched["happened"] = line_count > 0
+    enriched.update(_recording_runtime_for_room(room))
     return enriched
 
 
@@ -1082,6 +1371,135 @@ def create_app() -> FastAPI:
             content=body,
             media_type="text/plain; charset=utf-8",
             headers={"Content-Disposition": f'attachment; filename="{safe_name}-transcript.txt"'},
+        )
+
+    @app.post("/api/recordings/start", response_model=RecordingStatusResponse)
+    async def start_recording(
+        payload: RecordingControlRequest,
+        username: str = Depends(require_session_user),
+    ) -> RecordingStatusResponse:
+        del username
+        normalized_room = payload.room.strip()
+        if not normalized_room:
+            raise HTTPException(status_code=400, detail="room is required")
+
+        try:
+            current = await _list_room_egress(normalized_room, active=True)
+            live = _latest_live_egress(current)
+            if live is not None:
+                return _recording_status_response(room=normalized_room, live=live)
+
+            stamp = datetime.now(UTC).strftime("%Y%m%d%H%M%S")
+            safe_room = _safe_filename_component(normalized_room)
+            target_rel_path = f"/recordings/{safe_room}__{stamp}.mp4"
+            request = RoomCompositeEgressRequest(
+                room_name=normalized_room,
+                layout="speaker-dark",
+                file_outputs=[EncodedFileOutput(file_type=EncodedFileType.MP4, filepath=target_rel_path)],
+            )
+            async with api.LiveKitAPI(
+                url=settings.livekit_url,
+                api_key=settings.livekit_api_key,
+                api_secret=settings.livekit_api_secret,
+            ) as lk:
+                info = await lk.egress.start_room_composite_egress(request)
+            return _recording_status_response(room=normalized_room, live=info)
+        except Exception as exc:  # noqa: BLE001
+            logging.exception("recording_start_failed room=%s", normalized_room)
+            raise HTTPException(status_code=503, detail=f"unable to start recording: {_friendly_egress_error(exc)}") from exc
+
+    @app.post("/api/recordings/stop", response_model=RecordingStatusResponse)
+    async def stop_recording(
+        payload: RecordingControlRequest,
+        username: str = Depends(require_session_user),
+    ) -> RecordingStatusResponse:
+        del username
+        normalized_room = payload.room.strip()
+        if not normalized_room:
+            raise HTTPException(status_code=400, detail="room is required")
+
+        try:
+            current = await _list_room_egress(normalized_room, active=True)
+            live = _latest_live_egress(current)
+            if live is None:
+                all_infos = await _list_room_egress(normalized_room)
+                latest_done = _latest_terminal_egress(all_infos)
+                if latest_done is not None:
+                    _capture_egress_recording(normalized_room, latest_done)
+                return _recording_status_response(room=normalized_room, live=None)
+
+            egress_id = str(getattr(live, "egress_id", "") or "")
+            async with api.LiveKitAPI(
+                url=settings.livekit_url,
+                api_key=settings.livekit_api_key,
+                api_secret=settings.livekit_api_secret,
+            ) as lk:
+                info = await lk.egress.stop_egress(StopEgressRequest(egress_id=egress_id))
+
+            if egress_id:
+                task_key = f"{normalized_room}:{egress_id}"
+                existing_task = recording_finalize_tasks.get(task_key)
+                if existing_task is None or existing_task.done():
+                    recording_finalize_tasks[task_key] = asyncio.create_task(
+                        _finalize_egress_recording(normalized_room, egress_id)
+                    )
+
+            next_live = info if _is_egress_live(int(getattr(info, "status", 0) or 0)) else None
+            return _recording_status_response(room=normalized_room, live=next_live)
+        except Exception as exc:  # noqa: BLE001
+            logging.exception("recording_stop_failed room=%s", normalized_room)
+            raise HTTPException(status_code=503, detail=f"unable to stop recording: {_friendly_egress_error(exc)}") from exc
+
+    @app.get("/api/recordings/{room}/status", response_model=RecordingStatusResponse)
+    async def recording_status(
+        room: str,
+        username: str = Depends(require_session_user),
+    ) -> RecordingStatusResponse:
+        del username
+        normalized_room = room.strip()
+        if not normalized_room:
+            raise HTTPException(status_code=400, detail="room is required")
+
+        try:
+            infos = await _list_room_egress(normalized_room)
+            live = _latest_live_egress(infos)
+            latest_done = _latest_terminal_egress(infos)
+            if latest_done is not None:
+                _capture_egress_recording(normalized_room, latest_done)
+            return _recording_status_response(room=normalized_room, live=live)
+        except Exception as exc:  # noqa: BLE001
+            detail = _friendly_egress_error(exc)
+            if "not configured" in detail:
+                return _recording_status_response(room=normalized_room, live=None)
+            logging.exception("recording_status_failed room=%s", normalized_room)
+            raise HTTPException(status_code=503, detail=f"unable to fetch recording status: {detail}") from exc
+
+    @app.get("/api/recordings/{room}/download")
+    async def download_recording(
+        room: str,
+        username: str = Depends(require_session_user),
+    ) -> Response:
+        del username
+        normalized_room = room.strip()
+        path = _latest_recording_path(normalized_room)
+        if path is None or not path.exists():
+            raise HTTPException(status_code=404, detail="recording not found")
+
+        content_type = "application/octet-stream"
+        suffix = path.suffix.lower()
+        if suffix == ".webm":
+            content_type = "video/webm"
+        elif suffix == ".mp4":
+            content_type = "video/mp4"
+        elif suffix == ".m4a":
+            content_type = "audio/mp4"
+        elif suffix == ".wav":
+            content_type = "audio/wav"
+
+        return Response(
+            content=path.read_bytes(),
+            media_type=content_type,
+            headers={"Content-Disposition": f'attachment; filename="{path.name}"'},
         )
 
     @app.get("/api/positions", response_model=list[PositionRecord])

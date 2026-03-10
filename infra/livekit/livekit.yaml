@@ -1,0 +1,15 @@
+port: 7880
+bind_addresses:
+  - ""
+
+rtc:
+  tcp_port: 7881
+  port_range_start: 52000
+  port_range_end: 52050
+  use_external_ip: false
+
+keys:
+  devkey: secret
+
+redis:
+  address: livekit-redis:6379

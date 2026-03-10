@@ -15,6 +15,7 @@ export function InterviewsPage({ onJoinInterview, onOpenApplication }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [downloadingRoom, setDownloadingRoom] = useState('');
+  const [downloadingRecordingRoom, setDownloadingRecordingRoom] = useState('');
 
   const loadInterviews = useCallback(async () => {
     setLoading(true);
@@ -52,6 +53,28 @@ export function InterviewsPage({ onJoinInterview, onOpenApplication }) {
       setError(err.message);
     } finally {
       setDownloadingRoom('');
+    }
+  }
+
+  async function downloadRecordingForRoom(room) {
+    const targetRoom = String(room || '').trim();
+    if (!targetRoom) return;
+    setDownloadingRecordingRoom(targetRoom);
+    setError('');
+    try {
+      const { blob, filename } = await apiClient.downloadRecording(targetRoom);
+      const url = window.URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = filename || `${targetRoom}-recording.mp4`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setDownloadingRecordingRoom('');
     }
   }
 
@@ -125,11 +148,12 @@ export function InterviewsPage({ onJoinInterview, onOpenApplication }) {
                         <button
                           type="button"
                           className="secondary-button icon-action-btn"
-                          disabled={true}
-                          title="Download video (coming soon)"
-                          aria-label="Download video (coming soon)"
+                          title="Download recording"
+                          aria-label="Download recording"
+                          onClick={() => downloadRecordingForRoom(row.interview?.room)}
+                          disabled={!row.interview?.recording_available || downloadingRecordingRoom === row.interview?.room}
                         >
-                          🎥
+                          {downloadingRecordingRoom === row.interview?.room ? '…' : '🎥'}
                         </button>
                         <button
                           type="button"

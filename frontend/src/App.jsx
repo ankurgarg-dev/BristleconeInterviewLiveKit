@@ -1,12 +1,14 @@
 import '@livekit/components-styles';
 import {
   ConnectionStateToast,
-  ControlBar,
+  DisconnectButton,
   GridLayout,
   LiveKitRoom,
+  MediaDeviceMenu,
   ParticipantTile,
   PreJoin,
   RoomAudioRenderer,
+  TrackToggle,
   VideoTrack,
   VideoConference,
   isTrackReference,
@@ -469,6 +471,9 @@ function AgentWaveConference({
   micStream,
   micEnabled,
   assistantSpeaking,
+  recordingActive,
+  recordingBusy,
+  onToggleRecording,
 }) {
   const participants = useParticipants();
   const tracks = useTracks(
@@ -550,7 +555,45 @@ function AgentWaveConference({
             </GridLayout>
           </div>
         )}
-        <ControlBar controls={{ chat: false, settings: false }} />
+        <div className="meeting-controls-inline custom-controls-row">
+          <div className="lk-button-group">
+            <TrackToggle source={Track.Source.Microphone} showIcon={true}>
+              Microphone
+            </TrackToggle>
+            <div className="lk-button-group-menu">
+              <MediaDeviceMenu kind="audioinput" />
+            </div>
+          </div>
+          <div className="lk-button-group">
+            <TrackToggle source={Track.Source.Camera} showIcon={true}>
+              Camera
+            </TrackToggle>
+            <div className="lk-button-group-menu">
+              <MediaDeviceMenu kind="videoinput" />
+            </div>
+          </div>
+          <TrackToggle
+            source={Track.Source.ScreenShare}
+            captureOptions={{ audio: true, selfBrowserSurface: 'include' }}
+            showIcon={true}
+          >
+            Share screen
+          </TrackToggle>
+          <button
+            type="button"
+            className={`lk-button lk-record-button ${recordingActive ? 'is-live' : ''}`}
+            onClick={onToggleRecording}
+            disabled={recordingBusy}
+            title={recordingActive ? 'Stop recording' : 'Start recording'}
+            aria-label={recordingActive ? 'Stop recording' : 'Start recording'}
+          >
+            <span className="lk-record-button-dot" />
+            <span className="lk-record-button-text">Rec</span>
+          </button>
+          <DisconnectButton>
+            Leave
+          </DisconnectButton>
+        </div>
       </div>
       <RoomAudioRenderer />
       <ConnectionStateToast />
@@ -650,6 +693,10 @@ function MeetingView({ tokenInfo, onLeave, userName }) {
   const [directMicStream, setDirectMicStream] = useState(null);
   const [directMicEnabled, setDirectMicEnabled] = useState(true);
   const [assistantSpeaking, setAssistantSpeaking] = useState(false);
+  const [recordingActive, setRecordingActive] = useState(false);
+  const [recordingBusy, setRecordingBusy] = useState(false);
+  const [recordingError, setRecordingError] = useState('');
+  const [recordingEgressId, setRecordingEgressId] = useState('');
   const directPcRef = useRef(null);
   const directAudioRef = useRef(null);
   const directMicRef = useRef(null);
@@ -945,6 +992,46 @@ function MeetingView({ tokenInfo, onLeave, userName }) {
     };
   }, [directAudioElement, useDirectObserver]);
 
+  const toggleRecording = useCallback(async () => {
+    const room = String(tokenInfo.room || '').trim();
+    if (!room || recordingBusy) return;
+    setRecordingBusy(true);
+    setRecordingError('');
+    try {
+      const status = recordingActive
+        ? await apiClient.stopRecording(room)
+        : await apiClient.startRecording(room);
+      setRecordingActive(Boolean(status?.is_recording));
+      setRecordingEgressId(String(status?.egress_id || ''));
+    } catch (err) {
+      setRecordingError(err?.message || 'Recording action failed');
+    } finally {
+      setRecordingBusy(false);
+    }
+  }, [recordingActive, recordingBusy, tokenInfo.room]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const room = String(tokenInfo.room || '').trim();
+    if (!room) return undefined;
+
+    const refresh = async () => {
+      try {
+        const status = await apiClient.recordingStatus(room);
+        if (cancelled) return;
+        setRecordingActive(Boolean(status?.is_recording));
+        setRecordingEgressId(String(status?.egress_id || ''));
+      } catch (_) {}
+    };
+
+    refresh();
+    const timer = window.setInterval(refresh, 2500);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [tokenInfo.room]);
+
   return (
     <div className="meeting-layout">
       <LiveKitRoom
@@ -973,18 +1060,37 @@ function MeetingView({ tokenInfo, onLeave, userName }) {
           <div className="meeting-main">
             {error && <div className="banner error">{error}</div>}
             {useDirectObserver && directError && <div className="banner error">{directError}</div>}
-            {useWaveAgentUi ? (
-              <AgentWaveConference
-                targetAgent={tokenInfo.selectedAgent}
-                status={directStatus}
-                audioElement={directAudioElement}
-                micStream={directMicStream}
-                micEnabled={directMicEnabled}
-                assistantSpeaking={assistantSpeaking}
-              />
-            ) : (
-              <VideoConference />
-            )}
+            {recordingError && <div className="banner error">{recordingError}</div>}
+            <div className="meeting-conference-wrap">
+              {useWaveAgentUi ? (
+                <AgentWaveConference
+                  targetAgent={tokenInfo.selectedAgent}
+                  status={directStatus}
+                  audioElement={directAudioElement}
+                  micStream={directMicStream}
+                  micEnabled={directMicEnabled}
+                  assistantSpeaking={assistantSpeaking}
+                  recordingActive={recordingActive}
+                  recordingBusy={recordingBusy}
+                  onToggleRecording={toggleRecording}
+                />
+              ) : (
+                <VideoConference />
+              )}
+              {!useWaveAgentUi && (
+                <button
+                  type="button"
+                  className={`recording-fab ${recordingActive ? 'is-live' : ''}`}
+                  onClick={toggleRecording}
+                  disabled={recordingBusy}
+                  title={recordingActive ? 'Stop recording' : 'Start recording'}
+                  aria-label={recordingActive ? 'Stop recording' : 'Start recording'}
+                  data-egress-id={recordingEgressId || ''}
+                >
+                  <span className="recording-fab-dot" />
+                </button>
+              )}
+            </div>
           </div>
           <ParticipantsSidebar />
         </div>
@@ -1491,7 +1597,11 @@ function HomePage({ user, tokenInfo, defaultRoom, onJoin, onLeaveMeeting, onLogo
         <main className="portal-content">
           {activeMenu === 'meeting' &&
             (tokenInfo ? (
-              <MeetingView tokenInfo={tokenInfo} onLeave={onLeaveMeeting} userName={user} />
+              <MeetingView
+                tokenInfo={tokenInfo}
+                onLeave={onLeaveMeeting}
+                userName={user}
+              />
             ) : (
               <JoinCard user={user} onJoin={onJoin} defaultRoom={defaultRoom} />
             ))}

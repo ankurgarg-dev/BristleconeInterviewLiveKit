@@ -100,6 +100,35 @@ export const apiClient = {
       filename: match?.[1] || `${room}-transcript.txt`,
     };
   },
+  startRecording: (room) =>
+    api('/api/recordings/start', {
+      method: 'POST',
+      body: JSON.stringify({ room }),
+    }),
+  stopRecording: (room) =>
+    api('/api/recordings/stop', {
+      method: 'POST',
+      body: JSON.stringify({ room }),
+    }),
+  recordingStatus: (room) => api(`/api/recordings/${encodeURIComponent(room)}/status`, { method: 'GET' }),
+  downloadRecording: async (room) => {
+    const response = await fetch(`${API_BASE_URL}/api/recordings/${encodeURIComponent(room)}/download`, {
+      method: 'GET',
+      credentials: 'include',
+    });
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      const detail = formatApiDetail(body.detail);
+      throw new Error(detail || `request failed: ${response.status}`);
+    }
+    const blob = await response.blob();
+    const disposition = response.headers.get('content-disposition') || '';
+    const match = disposition.match(/filename=\"?([^\";]+)\"?/i);
+    return {
+      blob,
+      filename: match?.[1] || `${room}-recording.mp4`,
+    };
+  },
   listPositions: () => api('/api/positions', { method: 'GET' }),
   getPosition: (positionId) => api(`/api/positions/${encodeURIComponent(positionId)}`, { method: 'GET' }),
   createPosition: (payload) =>

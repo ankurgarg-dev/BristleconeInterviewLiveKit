@@ -206,6 +206,12 @@ button:disabled {
   flex-direction: column;
 }
 
+.meeting-conference-wrap {
+  position: relative;
+  min-height: 0;
+  flex: 1 1 auto;
+}
+
 .meeting-main .lk-video-conference,
 .meeting-main .lk-video-conference-inner {
   height: 100%;
@@ -227,6 +233,179 @@ button:disabled {
 .meeting-main .lk-agent-control-bar {
   margin-top: auto;
   padding-bottom: max(0.25rem, env(safe-area-inset-bottom));
+}
+
+.meeting-controls-inline {
+  width: 100%;
+  margin-top: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.42rem;
+  margin-top: 0.65rem;
+  padding-top: 0.65rem;
+  padding-bottom: max(0.35rem, env(safe-area-inset-bottom));
+  border-top: 1px solid #d8e3ea;
+}
+
+.meeting-controls-inline .lk-control-bar,
+.meeting-controls-inline .lk-agent-control-bar {
+  margin-top: 0;
+  padding-bottom: 0;
+}
+
+.custom-controls-row .lk-button,
+.custom-controls-row .lk-button-group .lk-button,
+.custom-controls-row .lk-button-group-menu .lk-button {
+  min-height: 2.45rem;
+  border-radius: 0.7rem;
+  border: 1px solid #cad7df;
+  background: #ffffff;
+  color: #223b48;
+  box-shadow: 0 1px 2px rgba(13, 29, 40, 0.08);
+}
+
+.custom-controls-row .lk-button:hover,
+.custom-controls-row .lk-button:focus-visible,
+.custom-controls-row .lk-button-group .lk-button:hover,
+.custom-controls-row .lk-button-group .lk-button:focus-visible,
+.custom-controls-row .lk-button-group-menu .lk-button:hover,
+.custom-controls-row .lk-button-group-menu .lk-button:focus-visible {
+  border-color: #a9becb;
+  background: #f7fafc;
+}
+
+.custom-controls-row .lk-button[data-lk-source='screen_share'][aria-pressed='true'] {
+  background: #edf6ff;
+  border-color: #95bde0;
+}
+
+.custom-controls-row .lk-button-group {
+  margin: 0;
+}
+
+.custom-controls-row .lk-button-group .lk-button {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.custom-controls-row .lk-button-group-menu .lk-button {
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  min-width: 2.35rem;
+  padding: 0 0.45rem;
+}
+
+.lk-record-button {
+  min-height: 2.35rem;
+  min-width: 4.4rem;
+  border-radius: 0.7rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.42rem;
+  background: #ffffff;
+  border-color: #cad7df;
+  color: #223b48;
+}
+
+.lk-record-button:hover,
+.lk-record-button:focus-visible {
+  border-color: #a9becb;
+  background: #f7fafc;
+}
+
+.lk-record-button-dot {
+  width: 0.68rem;
+  height: 0.68rem;
+  border-radius: 999px;
+  background: #7d8791;
+}
+
+.lk-record-button-text {
+  font-size: 0.84rem;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0.01em;
+  color: #4f6573;
+}
+
+.lk-record-button.is-live {
+  background: #fff3f3;
+  border-color: #f2a2a2;
+  color: #8f1d1d;
+}
+
+.lk-record-button.is-live .lk-record-button-text {
+  color: #8f1d1d;
+}
+
+.lk-record-button.is-live .lk-record-button-dot {
+  background: #ff2c2c;
+  box-shadow: 0 0 0 2px rgba(255, 44, 44, 0.33);
+  animation: recordingPulse 1s steps(2, end) infinite;
+}
+
+.custom-controls-row .lk-disconnect-button {
+  border: 1px solid #eb9797;
+  background: #fff3f3;
+  color: #9b1919;
+}
+
+.custom-controls-row .lk-disconnect-button:hover,
+.custom-controls-row .lk-disconnect-button:focus-visible {
+  border-color: #df7070;
+  background: #ffe8e8;
+}
+
+.recording-fab {
+  position: absolute;
+  right: 1rem;
+  bottom: 1rem;
+  width: 44px;
+  height: 44px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(5, 12, 16, 0.62);
+  display: grid;
+  place-items: center;
+  z-index: 11;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.35);
+}
+
+.recording-fab:hover,
+.recording-fab:focus-visible {
+  border-color: rgba(255, 255, 255, 0.32);
+  background: rgba(6, 14, 19, 0.8);
+}
+
+.recording-fab:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.recording-fab-dot {
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  background: #8b1010;
+  box-shadow: 0 0 0 2px rgba(255, 44, 44, 0.2);
+}
+
+.recording-fab.is-live .recording-fab-dot {
+  background: #ff2c2c;
+  box-shadow: 0 0 0 2px rgba(255, 44, 44, 0.34);
+  animation: recordingPulse 1s steps(2, end) infinite;
+}
+
+@keyframes recordingPulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.25;
+  }
 }
 
 .standard-participant-tile,
@@ -883,6 +1062,13 @@ button:disabled {
   .meeting-main .lk-control-bar,
   .meeting-main .lk-agent-control-bar {
     padding-bottom: max(0.15rem, env(safe-area-inset-bottom));
+  }
+
+  .recording-fab {
+    right: 0.7rem;
+    bottom: 0.7rem;
+    width: 40px;
+    height: 40px;
   }
 
   .sidebar {
